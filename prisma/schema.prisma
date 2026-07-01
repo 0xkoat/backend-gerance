@@ -11,3 +11,59 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+model Tenant {
+  id         String         @id @default(uuid()) @db.Uuid
+  name       String
+  createdAt  DateTime       @default(now())
+  users      User[]
+  modules    TenantModule[]
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  ANALYST
+  VIEWER
+}
+
+model User {
+  id             String    @id @default(uuid()) @db.Uuid
+  email          String    @unique
+  phoneNumber    String
+  name           String?
+  role           UserRole  @default(VIEWER)
+  hashedPassword String
+  tenantId       String?  @db.Uuid    
+  tenant         Tenant?  @relation(fields: [tenantId], references: [id])
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  @@index([tenantId])
+}
+
+enum ModuleName {
+  SIEM
+  SOAR
+  CTI
+  EDR
+  DFIR
+  VM
+}
+
+enum ModuleSourceType {
+  PLATFORM
+  OWN
+}
+
+model TenantModule {
+  id         String           @id @default(uuid()) @db.Uuid
+  tenantId   String           @db.Uuid
+  tenant     Tenant           @relation(fields: [tenantId], references: [id])
+  moduleName ModuleName
+  sourceType ModuleSourceType @default(PLATFORM)
+  config     Json?
+  isActive   Boolean          @default(true)
+
+  @@unique([tenantId, moduleName])
+  @@index([tenantId])
+}
