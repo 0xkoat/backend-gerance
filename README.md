@@ -23,7 +23,51 @@
 
 ## Description
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository — backend for the
+SecOPs multi-tenant SOC SaaS platform (SIEM, SOAR, CTI, EDR, DFIR, VM modules).
+
+## User provisioning & RBAC hierarchy
+
+There is no public sign-up. Every user is created by someone above them in the hierarchy —
+never by themselves.
+
+```
+                     ┌───────────────────────────────────────┐
+                     │              SUPER ADMIN                │
+                     │  seeded once via a seed script —         │
+                     │  NEVER exposed as an HTTP route          │
+                     │  • not bound to any tenant                │
+                     │  • creates Tenants                        │
+                     │  • creates each Tenant's first Admin      │
+                     └───────────────────┬─────────────────────┘
+                                         │ creates
+                                         ▼
+                     ┌───────────────────────────────────────┐
+                     │                 ADMIN                    │
+                     │  tenant-scoped                            │
+                     │  • full control within their own tenant   │
+                     │  • creates Analyst / Viewer accounts,      │
+                     │    scoped to their own tenant_id only      │
+                     └───────────────────┬─────────────────────┘
+                                         │ creates
+                         ┌───────────────┴────────────────┐
+                         ▼                                 ▼
+             ┌─────────────────────┐           ┌─────────────────────┐
+             │       ANALYST         │           │       VIEWER          │
+             │  tenant-scoped         │           │  tenant-scoped         │
+             │  investigate alerts,   │           │  read-only:            │
+             │  SIEM/CTI/DFIR work,   │           │  dashboards & alerts   │
+             │  can trigger SOAR      │           │                        │
+             └─────────────────────┘           └─────────────────────┘
+```
+
+Rules:
+- No `/auth/register` or equivalent self-signup endpoint exists.
+- A new user's `tenant_id` always comes from the creator's own auth token, never from the
+  request body.
+- A new user's `role` is determined by which endpoint is called, never by a client-supplied
+  field.
+- The first Super Admin is bootstrapped by a one-time seed script, not an API call.
 
 ## Project setup
 
