@@ -19,10 +19,12 @@ describe('AppController (e2e)', () => {
     role: UserRole.ANALYST,
     tenantId: 'tenant-1',
     hashedPassword: '',
+    mustChangePassword: false,
   };
 
   const mockUsersService = {
     findByEmail: jest.fn(),
+    requestPasswordReset: jest.fn(),
   };
 
   beforeAll(async () => {
@@ -101,5 +103,65 @@ describe('AppController (e2e)', () => {
       .set('Authorization', `Bearer ${token}`)
       .expect(200)
       .expect('Hello World!');
+  });
+
+  it('login response includes mustChangePassword', async () => {
+    mockUsersService.findByEmail.mockResolvedValue(dbUser);
+
+    const response = await request(app.getHttpServer())
+      .post('/auth/login')
+      .send({ email: 'bob@x.com', password: 'Correct-password1!' })
+      .expect(200);
+
+    expect(response.body).toMatchObject({ mustChangePassword: false });
+  });
+
+  describe('POST /auth/forgot-password', () => {
+    it('returns a generic message when the email exists', async () => {
+      mockUsersService.requestPasswordReset.mockResolvedValue(undefined);
+
+      const response = await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .send({ email: 'bob@x.com' })
+        .expect(200);
+
+      expect(mockUsersService.requestPasswordReset).toHaveBeenCalledWith(
+        'bob@x.com',
+      );
+      expect(response.body).toEqual({
+        message:
+          'If an account exists with this email, your administrator has been notified.',
+      });
+    });
+
+    it('returns the same generic message when the email does not exist (no enumeration)', async () => {
+      mockUsersService.requestPasswordReset.mockResolvedValue(undefined);
+
+      const response = await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .send({ email: 'missing@x.com' })
+        .expect(200);
+
+      expect(response.body).toEqual({
+        message:
+          'If an account exists with this email, your administrator has been notified.',
+      });
+    });
+
+    it('requires no authentication', () => {
+      mockUsersService.requestPasswordReset.mockResolvedValue(undefined);
+
+      return request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .send({ email: 'bob@x.com' })
+        .expect(200);
+    });
+
+    it('rejects an invalid email format', () => {
+      return request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .send({ email: 'not-an-email' })
+        .expect(400);
+    });
   });
 });

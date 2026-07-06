@@ -3,7 +3,9 @@ import {
   ConflictException,
   ForbiddenException,
   NotFoundException,
+  UnauthorizedException,
 } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 import { UserRole } from '../generated/prisma/enums';
@@ -11,6 +13,7 @@ import type { AuthenticatedUser } from '../auth/jwt.strategy';
 import { CreateSubordinateUserDto } from './dto/createSubordinateUser.dto';
 import { UpdateUserDto } from './dto/updateUser.dto';
 import { ChangeUserRoleDto } from './dto/changeUserRole.dto';
+import { ChangePasswordDto } from './dto/changePassword.dto';
 
 const mockUsersService = {
   findByIdForTenant: jest.fn(),
@@ -19,6 +22,12 @@ const mockUsersService = {
   updateUserForTenant: jest.fn(),
   changeRoleForTenant: jest.fn(),
   removeUserForTenant: jest.fn(),
+  changePassword: jest.fn(),
+  resetPasswordForTenant: jest.fn(),
+};
+
+const mockJwtService = {
+  sign: jest.fn(),
 };
 
 describe('UsersController', () => {
@@ -28,12 +37,14 @@ describe('UsersController', () => {
     userId: 'admin-1',
     role: UserRole.ADMIN,
     tenantId: 'tenant-1',
+    mustChangePassword: false,
   };
 
   const noTenantAdmin: AuthenticatedUser = {
     userId: 'admin-1',
     role: UserRole.ADMIN,
     tenantId: null,
+    mustChangePassword: false,
   };
 
   const dbUser = {
@@ -53,7 +64,10 @@ describe('UsersController', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       controllers: [UsersController],
-      providers: [{ provide: UsersService, useValue: mockUsersService }],
+      providers: [
+        { provide: UsersService, useValue: mockUsersService },
+        { provide: JwtService, useValue: mockJwtService },
+      ],
     }).compile();
 
     controller = module.get<UsersController>(UsersController);
@@ -326,6 +340,114 @@ describe('UsersController', () => {
       await expect(
         controller.deleteUserById(admin, 'missing-id'),
       ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('resetUserPassword', () => {
+    it('resets another user password in the tenant', async () => {
+      mockUsersService.resetPasswordForTenant.mockResolvedValue(undefined);
+
+      const result = await controller.resetUserPassword(admin, 'user-1', {
+        newPassword: 'New-password1!',
+      });
+
+      expect(mockUsersService.resetPasswordForTenant).toHaveBeenCalledWith(
+        'user-1',
+        'tenant-1',
+        'New-password1!',
+      );
+      expect(result).toEqual({ message: 'Password reset successfully' });
+    });
+
+    it('throws ForbiddenException when the caller has no tenantId', async () => {
+      await expect(
+        controller.resetUserPassword(noTenantAdmin, 'user-1', {
+          newPassword: 'New-password1!',
+        }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockUsersService.resetPasswordForTenant).not.toHaveBeenCalled();
+    });
+
+    it('propagates NotFoundException from the service', async () => {
+      mockUsersService.resetPasswordForTenant.mockRejectedValue(
+        new NotFoundException('User not found'),
+      );
+
+      await expect(
+        controller.resetUserPassword(admin, 'missing-id', {
+          newPassword: 'New-password1!',
+        }),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('changeMyPassword', () => {
+    const dto: ChangePasswordDto = {
+      currentPassword: 'Old-password1!',
+      newPassword: 'New-password1!',
+    };
+
+    it('changes the caller own password and returns a confirmation with a fresh token', async () => {
+      mockUsersService.changePassword.mockResolvedValue({
+        id: admin.userId,
+        role: UserRole.ADMIN,
+        tenantId: 'tenant-1',
+        mustChangePassword: false,
+      });
+      mockJwtService.sign.mockReturnValue('fresh-jwt');
+
+      const result = await controller.changeMyPassword(admin, dto);
+
+      expect(mockUsersService.changePassword).toHaveBeenCalledWith(
+        admin.userId,
+        dto.currentPassword,
+        dto.newPassword,
+      );
+      expect(mockJwtService.sign).toHaveBeenCalledWith({
+        sub: admin.userId,
+        role: UserRole.ADMIN,
+        tenantId: 'tenant-1',
+        mustChangePassword: false,
+      });
+      expect(result).toEqual({
+        message: 'Password changed successfully',
+        access_token: 'fresh-jwt',
+        mustChangePassword: false,
+      });
+    });
+
+    it('propagates UnauthorizedException when the current password is wrong', async () => {
+      mockUsersService.changePassword.mockRejectedValue(
+        new UnauthorizedException('Current password is incorrect'),
+      );
+
+      await expect(controller.changeMyPassword(admin, dto)).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(mockJwtService.sign).not.toHaveBeenCalled();
+    });
+
+    it('works even when the caller has no tenantId (no tenant guard on this route)', async () => {
+      mockUsersService.changePassword.mockResolvedValue({
+        id: noTenantAdmin.userId,
+        role: UserRole.ADMIN,
+        tenantId: null,
+        mustChangePassword: false,
+      });
+      mockJwtService.sign.mockReturnValue('fresh-jwt');
+
+      const result = await controller.changeMyPassword(noTenantAdmin, dto);
+
+      expect(mockUsersService.changePassword).toHaveBeenCalledWith(
+        noTenantAdmin.userId,
+        dto.currentPassword,
+        dto.newPassword,
+      );
+      expect(result).toEqual({
+        message: 'Password changed successfully',
+        access_token: 'fresh-jwt',
+        mustChangePassword: false,
+      });
     });
   });
 });

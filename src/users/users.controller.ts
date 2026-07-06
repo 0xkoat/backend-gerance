@@ -8,6 +8,7 @@ import {
   Patch,
   Delete,
 } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import { UsersService } from './users.service';
 import { User, UserRole } from '../generated/prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -16,12 +17,18 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { CreateSubordinateUserDto } from './dto/createSubordinateUser.dto';
 import { UpdateUserDto } from './dto/updateUser.dto';
 import { ChangeUserRoleDto } from './dto/changeUserRole.dto';
+import { ChangePasswordDto } from './dto/changePassword.dto';
+import { ResetPasswordDto } from './dto/resetPassword.dto';
+import { SkipPasswordCheck } from '../auth/decorators/skip-password-check.decorator';
 
 type SafeUser = Omit<User, 'hashedPassword'>;
 
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly jwtService: JwtService,
+  ) {}
 
   @Get('me')
   async getMe(@CurrentUser() user: AuthenticatedUser): Promise<SafeUser> {
@@ -36,6 +43,36 @@ export class UsersController {
     const { hashedPassword, ...safeUser } = foundUser;
 
     return safeUser;
+  }
+
+  @SkipPasswordCheck()
+  @Patch('me/password')
+  async changeMyPassword(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() changePasswordDto: ChangePasswordDto,
+  ): Promise<{
+    message: string;
+    access_token: string;
+    mustChangePassword: boolean;
+  }> {
+    const updatedUser = await this.usersService.changePassword(
+      user.userId,
+      changePasswordDto.currentPassword,
+      changePasswordDto.newPassword,
+    );
+
+    const access_token = this.jwtService.sign({
+      sub: updatedUser.id,
+      role: updatedUser.role,
+      tenantId: updatedUser.tenantId,
+      mustChangePassword: updatedUser.mustChangePassword,
+    });
+
+    return {
+      message: 'Password changed successfully',
+      access_token,
+      mustChangePassword: updatedUser.mustChangePassword,
+    };
   }
 
   @Roles(UserRole.ADMIN)
@@ -133,6 +170,26 @@ export class UsersController {
     const { hashedPassword, ...safeUser } = updatedUser;
 
     return safeUser;
+  }
+
+  @Roles(UserRole.ADMIN)
+  @Post(':id/reset-password')
+  async resetUserPassword(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() resetPasswordDto: ResetPasswordDto,
+  ): Promise<{ message: string }> {
+    if (!user.tenantId) {
+      throw new ForbiddenException('This account is not scoped to a tenant');
+    }
+
+    await this.usersService.resetPasswordForTenant(
+      id,
+      user.tenantId,
+      resetPasswordDto.newPassword,
+    );
+
+    return { message: 'Password reset successfully' };
   }
 
   @Roles(UserRole.ADMIN)
