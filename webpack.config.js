@@ -18,6 +18,12 @@ module.exports = function (options, webpack) {
   return {
     ...options,
     entry,
+    resolve: {
+      ...options.resolve,
+      extensionAlias: {
+        '.js': ['.js', '.ts'],
+      },
+    },
     externals: [
       nodeExternals({
         allowlist: ['webpack/hot/poll?100'],
