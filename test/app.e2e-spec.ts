@@ -164,4 +164,22 @@ describe('AppController (e2e)', () => {
         .expect(400);
     });
   });
+
+  describe('rate limiting on auth routes', () => {
+    it('returns 429 after exceeding the per-minute attempt limit on /auth/login', async () => {
+      mockUsersService.findByEmail.mockResolvedValue(dbUser);
+
+      for (let i = 0; i < 5; i++) {
+        await request(app.getHttpServer())
+          .post('/auth/login')
+          .send({ email: 'bob@x.com', password: 'wrong-password' })
+          .expect(401);
+      }
+
+      await request(app.getHttpServer())
+        .post('/auth/login')
+        .send({ email: 'bob@x.com', password: 'wrong-password' })
+        .expect(429);
+    });
+  });
 });

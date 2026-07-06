@@ -68,6 +68,19 @@ Hard rules that follow from this:
 - An Admin cannot delete their own account (`DELETE /users/:id` where `:id` matches the
   caller's own user ID is rejected), to prevent a tenant from being accidentally locked out
   of Admin access. Deleting another co-Admin in the same tenant is allowed.
+- An Admin cannot change their own role via `PATCH /users/:id/role` (same self-target
+  rejection), to avoid accidental self-demotion/lockout.
+- An Admin cannot reset their own password via `POST /users/:id/reset-password` — that route
+  sets an Admin-chosen password with no proof of the old one, so allowing it on yourself would
+  let a stolen/leaked bearer token turn into permanent account takeover (attacker resets the
+  password without ever knowing it). Self password changes must go through
+  `PATCH /users/me/password`, which requires the current password.
+- Demoting a tenant's last remaining Admin to a non-Admin role is rejected
+  (`ConflictException`) — every tenant must always have at least one Admin.
+- Login (`POST /auth/login`) always calls `argon2.verify` — even when the email doesn't
+  match any user, it verifies against a fixed dummy hash — so response timing can't be used
+  to enumerate which emails have accounts (argon2's cost makes the found-vs-not-found timing
+  gap large enough to be trivially measurable otherwise; verified empirically at ~78ms).
 
 # Conventions
 

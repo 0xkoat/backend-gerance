@@ -379,6 +379,15 @@ describe('UsersController', () => {
         }),
       ).rejects.toThrow(NotFoundException);
     });
+
+    it('throws ForbiddenException when the caller targets their own account, without calling the service', async () => {
+      await expect(
+        controller.resetUserPassword(admin, admin.userId, {
+          newPassword: 'New-password1!',
+        }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockUsersService.resetPasswordForTenant).not.toHaveBeenCalled();
+    });
   });
 
   describe('changeMyPassword', () => {

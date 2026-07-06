@@ -6,6 +6,9 @@ import * as argon2 from 'argon2';
 
 type SafeUser = Omit<User, 'hashedPassword'>;
 
+const DUMMY_HASH =
+  '$argon2id$v=19$m=65536,t=3,p=4$GI8yFc6QCemSdwM0skhZvg$3elgnlxE0oIy891fIvSi8cabR0CpJgR2fGQ/xqKpOys';
+
 @Injectable()
 export class AuthService {
   constructor(
@@ -15,14 +18,16 @@ export class AuthService {
 
   async validateUser(email: string, password: string): Promise<SafeUser> {
     const user = await this.usersService.findByEmail(email);
-    if (!user) {
+
+    const isPasswordValid = await argon2.verify(
+      user?.hashedPassword ?? DUMMY_HASH,
+      password,
+    );
+
+    if (!user || !isPasswordValid) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const isPasswordValid = await argon2.verify(user.hashedPassword, password);
-    if (!isPasswordValid) {
-      throw new UnauthorizedException('Invalid credentials');
-    }
     const { hashedPassword, ...userWithoutPassword } = user;
 
     return userWithoutPassword;
