@@ -3,6 +3,7 @@ import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import * as argon2 from 'argon2';
+import helmet from 'helmet';
 import { AppModule } from './../src/app.module';
 import { UsersService } from './../src/users/users.service';
 import { PrismaService } from './../src/prisma/prisma.service';
@@ -47,6 +48,7 @@ describe('AppController (e2e)', () => {
       .compile();
 
     app = moduleFixture.createNestApplication();
+    app.use(helmet());
     app.useGlobalPipes(
       new ValidationPipe({
         whitelist: true,
@@ -162,6 +164,19 @@ describe('AppController (e2e)', () => {
         .post('/auth/forgot-password')
         .send({ email: 'not-an-email' })
         .expect(400);
+    });
+  });
+
+  describe('security headers', () => {
+    it('applies helmet headers to responses', async () => {
+      const response = await request(app.getHttpServer())
+        .post('/auth/forgot-password')
+        .send({ email: 'bob@x.com' })
+        .expect(200);
+
+      expect(response.headers['x-frame-options']).toBe('SAMEORIGIN');
+      expect(response.headers['x-content-type-options']).toBe('nosniff');
+      expect(response.headers['x-dns-prefetch-control']).toBe('off');
     });
   });
 
