@@ -17,12 +17,12 @@ export class UsersService {
         });
     }
 
-    async findById(id: string) {
+    async findByIdForTenant(id: string, tenantId: string) {
         const user = await this.prisma.user.findUnique({
             where: { id },
         });
 
-        if (!user) {
+        if (!user || user.tenantId !== tenantId) {
             throw new NotFoundException('User not found');
         }
 
@@ -60,36 +60,47 @@ export class UsersService {
         }
     }
 
-    async updateUser(id: string, updateUserDto: UpdateUserDto) {
+    async updateUserForTenant(id: string, tenantId: string, updateUserDto: UpdateUserDto) {
+        await this.findByIdForTenant(id, tenantId);
+
         try {
             return await this.prisma.user.update({
                 where: { id },
                 data: updateUserDto,
             });
         } catch (error) {
-            if (error instanceof Prisma.PrismaClientKnownRequestError) {
-                if (error.code === 'P2025') {
-                    throw new NotFoundException('User not found');
-                }
-                if (error.code === 'P2002') {
-                    throw new ConflictException('A user with this email already exists');
-                }
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+                throw new ConflictException('A user with this email already exists');
             }
             throw error;
         }
     }
 
-    async removeUser(id: string) {
-        try {
-            return await this.prisma.user.delete({
-                where: { id },
+    async removeUserForTenant(id: string, tenantId: string) {
+        await this.findByIdForTenant(id, tenantId);
+
+        return this.prisma.user.delete({
+            where: { id },
+        });
+    }
+
+    async changeRoleForTenant(id: string, tenantId: string, role: UserRole) {
+        const user = await this.findByIdForTenant(id, tenantId);
+
+        if (user.role === UserRole.ADMIN && role !== UserRole.ADMIN) {
+            const adminCount = await this.prisma.user.count({
+                where: { tenantId, role: UserRole.ADMIN },
             });
-        } catch (error) {
-            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-                throw new NotFoundException('User not found');
+
+            if (adminCount <= 1) {
+                throw new ConflictException('Cannot demote the last remaining Admin in this tenant');
             }
-            throw error;
         }
+
+        return this.prisma.user.update({
+            where: { id },
+            data: { role },
+        });
     }
 
 }
