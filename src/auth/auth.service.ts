@@ -29,9 +29,19 @@ export class AuthService {
   }
 
   async login(user: SafeUser) {
-    const payload = { sub: user.id, role: user.role, tenantId: user.tenantId };
+    const payload = {
+      sub: user.id,
+      role: user.role,
+      tenantId: user.tenantId,
+      mustChangePassword: user.mustChangePassword,
+    };
     return {
       access_token: this.jwtService.sign(payload),
+      mustChangePassword: user.mustChangePassword,
     };
+  }
+
+  async requestPasswordReset(email: string): Promise<void> {
+    await this.usersService.requestPasswordReset(email);
   }
 }

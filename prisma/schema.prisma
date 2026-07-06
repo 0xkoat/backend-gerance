@@ -29,16 +29,18 @@ enum UserRole {
 }
 
 model User {
-  id             String    @id @default(uuid()) @db.Uuid
-  email          String    @unique
-  phoneNumber    String
-  name           String
-  role           UserRole  @default(VIEWER)
-  hashedPassword String
-  tenantId       String?  @db.Uuid    
-  tenant         Tenant?  @relation(fields: [tenantId], references: [id])
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  id                       String    @id @default(uuid()) @db.Uuid
+  email                    String    @unique
+  phoneNumber              String
+  name                     String
+  role                     UserRole  @default(VIEWER)
+  hashedPassword           String
+  tenantId                 String?  @db.Uuid
+  tenant                   Tenant?  @relation(fields: [tenantId], references: [id])
+  passwordResetRequestedAt DateTime?
+  mustChangePassword       Boolean   @default(false)
+  createdAt                DateTime  @default(now())
+  updatedAt                DateTime  @updatedAt
   @@index([tenantId])
 }
 

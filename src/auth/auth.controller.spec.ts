@@ -6,6 +6,7 @@ import { UserRole } from '../generated/prisma/client';
 const mockAuthService = {
   validateUser: jest.fn(),
   login: jest.fn(),
+  requestPasswordReset: jest.fn(),
 };
 
 describe('AuthController', () => {
@@ -42,9 +43,15 @@ describe('AuthController', () => {
       mockAuthService.validateUser.mockResolvedValue(safeUser);
       mockAuthService.login.mockResolvedValue({ access_token: 'signed-jwt' });
 
-      const result = await controller.login({ email: 'bob@x.com', password: 'correct-password' });
+      const result = await controller.login({
+        email: 'bob@x.com',
+        password: 'correct-password',
+      });
 
-      expect(mockAuthService.validateUser).toHaveBeenCalledWith('bob@x.com', 'correct-password');
+      expect(mockAuthService.validateUser).toHaveBeenCalledWith(
+        'bob@x.com',
+        'correct-password',
+      );
       expect(mockAuthService.login).toHaveBeenCalledWith(safeUser);
       expect(result).toEqual({ access_token: 'signed-jwt' });
     });
@@ -57,6 +64,35 @@ describe('AuthController', () => {
         controller.login({ email: 'bob@x.com', password: 'wrong-password' }),
       ).rejects.toThrow('Invalid credentials');
       expect(mockAuthService.login).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('forgotPassword', () => {
+    it('delegates to AuthService and returns a generic confirmation message', async () => {
+      mockAuthService.requestPasswordReset.mockResolvedValue(undefined);
+
+      const result = await controller.forgotPassword({ email: 'bob@x.com' });
+
+      expect(mockAuthService.requestPasswordReset).toHaveBeenCalledWith(
+        'bob@x.com',
+      );
+      expect(result).toEqual({
+        message:
+          'If an account exists with this email, your administrator has been notified.',
+      });
+    });
+
+    it('returns the same message regardless of whether the email exists (no enumeration)', async () => {
+      mockAuthService.requestPasswordReset.mockResolvedValue(undefined);
+
+      const knownResult = await controller.forgotPassword({
+        email: 'bob@x.com',
+      });
+      const unknownResult = await controller.forgotPassword({
+        email: 'missing@x.com',
+      });
+
+      expect(knownResult).toEqual(unknownResult);
     });
   });
 });

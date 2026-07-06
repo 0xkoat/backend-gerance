@@ -3,6 +3,7 @@ import {
   ConflictException,
   INestApplication,
   NotFoundException,
+  UnauthorizedException,
   ValidationPipe,
 } from '@nestjs/common';
 import request from 'supertest';
@@ -26,6 +27,7 @@ describe('UsersController (e2e)', () => {
     phoneNumber: string;
     role: UserRole;
     tenantId: string | null;
+    mustChangePassword: boolean;
   }
 
   const adminUser: FakeUser = {
@@ -35,6 +37,7 @@ describe('UsersController (e2e)', () => {
     phoneNumber: '+21612345678',
     role: UserRole.ADMIN,
     tenantId: 'tenant-1',
+    mustChangePassword: false,
   };
 
   const analystUser: FakeUser = {
@@ -44,6 +47,7 @@ describe('UsersController (e2e)', () => {
     phoneNumber: '+21612345679',
     role: UserRole.ANALYST,
     tenantId: 'tenant-1',
+    mustChangePassword: false,
   };
 
   const viewerUser: FakeUser = {
@@ -53,6 +57,7 @@ describe('UsersController (e2e)', () => {
     phoneNumber: '+21612345680',
     role: UserRole.VIEWER,
     tenantId: 'tenant-1',
+    mustChangePassword: false,
   };
 
   const noTenantAdminUser: FakeUser = {
@@ -62,6 +67,17 @@ describe('UsersController (e2e)', () => {
     phoneNumber: '+21612345681',
     role: UserRole.ADMIN,
     tenantId: null,
+    mustChangePassword: false,
+  };
+
+  const resetPendingUser: FakeUser = {
+    id: 'reset-pending-1',
+    email: 'reset-pending@x.com',
+    name: 'Reset Pending',
+    phoneNumber: '+21612345682',
+    role: UserRole.ANALYST,
+    tenantId: 'tenant-1',
+    mustChangePassword: true,
   };
 
   const usersByEmail: Record<string, FakeUser> = {
@@ -69,6 +85,7 @@ describe('UsersController (e2e)', () => {
     [analystUser.email]: analystUser,
     [viewerUser.email]: viewerUser,
     [noTenantAdminUser.email]: noTenantAdminUser,
+    [resetPendingUser.email]: resetPendingUser,
   };
 
   const mockUsersService = {
@@ -79,6 +96,8 @@ describe('UsersController (e2e)', () => {
     updateUserForTenant: jest.fn(),
     changeRoleForTenant: jest.fn(),
     removeUserForTenant: jest.fn(),
+    changePassword: jest.fn(),
+    resetPasswordForTenant: jest.fn(),
   };
 
   async function loginAs(email: string): Promise<string> {
@@ -452,6 +471,179 @@ describe('UsersController (e2e)', () => {
         .delete(`/users/${analystUser.id}`)
         .set('Authorization', `Bearer ${token}`)
         .expect(403);
+    });
+  });
+
+  describe('PATCH /users/me/password', () => {
+    it('allows any authenticated role to change their own password and returns a fresh token', async () => {
+      const token = await loginAs(viewerUser.email);
+      mockUsersService.changePassword.mockResolvedValue({
+        id: viewerUser.id,
+        role: viewerUser.role,
+        tenantId: viewerUser.tenantId,
+        mustChangePassword: false,
+      });
+
+      const response = await request(app.getHttpServer())
+        .patch('/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: PASSWORD, newPassword: 'New-password1!' })
+        .expect(200);
+
+      expect(mockUsersService.changePassword).toHaveBeenCalledWith(
+        viewerUser.id,
+        PASSWORD,
+        'New-password1!',
+      );
+      expect(response.body).toEqual({
+        message: 'Password changed successfully',
+        access_token: expect.any(String),
+        mustChangePassword: false,
+      });
+    });
+
+    it('returns 401 when the current password is wrong', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.changePassword.mockRejectedValue(
+        new UnauthorizedException('Current password is incorrect'),
+      );
+
+      await request(app.getHttpServer())
+        .patch('/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          currentPassword: 'wrong-password',
+          newPassword: 'New-password1!',
+        })
+        .expect(401);
+    });
+
+    it('rejects a weak new password', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .patch('/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: PASSWORD, newPassword: 'weak' })
+        .expect(400);
+      expect(mockUsersService.changePassword).not.toHaveBeenCalled();
+    });
+
+    it('rejects a request with no token', () => {
+      return request(app.getHttpServer())
+        .patch('/users/me/password')
+        .send({ currentPassword: PASSWORD, newPassword: 'New-password1!' })
+        .expect(401);
+    });
+
+    it('works for a caller with no tenantId (no tenant guard on this route)', async () => {
+      const token = await loginAs(noTenantAdminUser.email);
+      mockUsersService.changePassword.mockResolvedValue({
+        id: noTenantAdminUser.id,
+        role: noTenantAdminUser.role,
+        tenantId: noTenantAdminUser.tenantId,
+        mustChangePassword: false,
+      });
+
+      await request(app.getHttpServer())
+        .patch('/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: PASSWORD, newPassword: 'New-password1!' })
+        .expect(200);
+    });
+  });
+
+  describe('POST /users/:id/reset-password', () => {
+    it('allows an Admin to reset another user password', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.resetPasswordForTenant.mockResolvedValue(undefined);
+
+      const response = await request(app.getHttpServer())
+        .post(`/users/${analystUser.id}/reset-password`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ newPassword: 'New-password1!' })
+        .expect(201);
+
+      expect(mockUsersService.resetPasswordForTenant).toHaveBeenCalledWith(
+        analystUser.id,
+        adminUser.tenantId,
+        'New-password1!',
+      );
+      expect(response.body).toEqual({ message: 'Password reset successfully' });
+    });
+
+    it('rejects a weak new password', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .post(`/users/${analystUser.id}/reset-password`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ newPassword: 'weak' })
+        .expect(400);
+      expect(mockUsersService.resetPasswordForTenant).not.toHaveBeenCalled();
+    });
+
+    it('rejects an Analyst', async () => {
+      const token = await loginAs(analystUser.email);
+
+      await request(app.getHttpServer())
+        .post(`/users/${viewerUser.id}/reset-password`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ newPassword: 'New-password1!' })
+        .expect(403);
+    });
+
+    it('returns 404 when the target user does not exist in the tenant', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.resetPasswordForTenant.mockRejectedValue(
+        new NotFoundException('User not found'),
+      );
+
+      await request(app.getHttpServer())
+        .post('/users/missing-id/reset-password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ newPassword: 'New-password1!' })
+        .expect(404);
+    });
+  });
+
+  describe('mustChangePassword enforcement', () => {
+    it('blocks a user with mustChangePassword from hitting a normal route', async () => {
+      const token = await loginAs(resetPendingUser.email);
+
+      await request(app.getHttpServer())
+        .get('/users/me')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+    });
+
+    it('still allows that same user to change their password', async () => {
+      const token = await loginAs(resetPendingUser.email);
+      mockUsersService.changePassword.mockResolvedValue({
+        id: resetPendingUser.id,
+        role: resetPendingUser.role,
+        tenantId: resetPendingUser.tenantId,
+        mustChangePassword: false,
+      });
+
+      await request(app.getHttpServer())
+        .patch('/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: PASSWORD, newPassword: 'New-password1!' })
+        .expect(200);
+    });
+
+    it('does not block a user whose mustChangePassword is false', async () => {
+      const token = await loginAs(analystUser.email);
+      mockUsersService.findByIdForTenant.mockResolvedValue({
+        ...analystUser,
+        hashedPassword,
+      });
+
+      await request(app.getHttpServer())
+        .get('/users/me')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
     });
   });
 });
