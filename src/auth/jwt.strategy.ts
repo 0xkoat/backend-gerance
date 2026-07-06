@@ -10,6 +10,12 @@ interface JwtPayload {
   tenantId: string | null;
 }
 
+export interface AuthenticatedUser {
+  userId: string;
+  role: UserRole;
+  tenantId: string | null;
+}
+
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
   constructor() {
@@ -24,7 +30,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
-  async validate(payload: JwtPayload): Promise<{ userId: string; role: UserRole; tenantId: string | null }> {
+
+  async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
     return { userId: payload.sub, role: payload.role, tenantId: payload.tenantId };
   }
 }

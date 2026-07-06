@@ -35,8 +35,9 @@ someone above them in the hierarchy — never by themselves.
                      │                 ADMIN                    │
                      │  tenant-scoped                            │
                      │  • full control within their own tenant   │
-                     │  • creates Analyst / Viewer accounts,      │
-                     │    scoped to their own tenant_id only      │
+                     │  • creates co-Admin, Analyst, or Viewer    │
+                     │    accounts, scoped to their own tenant_id │
+                     │    only (self-loop: Admin → Admin)         │
                      └───────────────────┬─────────────────────┘
                                          │ creates
                          ┌───────────────┴────────────────┐
@@ -57,9 +58,16 @@ Hard rules that follow from this:
   could create users in a different tenant (cross-tenant privilege escalation).
 - A new user's `role` is determined by which endpoint/action is called, never by a
   client-supplied `role` field in the request body.
+- An Admin may create another Admin in their own tenant (co-Admin), in addition to
+  Analyst/Viewer — same tenant-scoping rule applies (`tenant_id` from the creator's token,
+  never the request body). This is the one hierarchy self-loop (Admin → Admin); every other
+  role is only ever created by the level above it.
 - The very first Super Admin is bootstrapped by a one-time seed script (reads credentials
   from env vars, run directly against the DB) — not by any API call, since no user exists
   yet to authorize creating one.
+- An Admin cannot delete their own account (`DELETE /users/:id` where `:id` matches the
+  caller's own user ID is rejected), to prevent a tenant from being accidentally locked out
+  of Admin access. Deleting another co-Admin in the same tenant is allowed.
 
 # Conventions
 

@@ -16,6 +16,7 @@ const mockPrismaService = {
     create: jest.fn(),
     update: jest.fn(),
     delete: jest.fn(),
+    count: jest.fn(),
   },
 };
 
@@ -68,12 +69,12 @@ describe('UsersService', () => {
     });
   });
 
-  describe('findById', () => {
-    it('returns the user when found', async () => {
-      const user = { id: '1', email: 'bob@x.com' };
+  describe('findByIdForTenant', () => {
+    it('returns the user when found in the given tenant', async () => {
+      const user = { id: '1', email: 'bob@x.com', tenantId: 'tenant-1' };
       mockPrismaService.user.findUnique.mockResolvedValue(user);
 
-      const result = await service.findById('1');
+      const result = await service.findByIdForTenant('1', 'tenant-1');
 
       expect(result).toEqual(user);
     });
@@ -81,7 +82,18 @@ describe('UsersService', () => {
     it('throws NotFoundException when no user matches', async () => {
       mockPrismaService.user.findUnique.mockResolvedValue(null);
 
-      await expect(service.findById('missing-id')).rejects.toThrow(NotFoundException);
+      await expect(service.findByIdForTenant('missing-id', 'tenant-1')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+
+    it('throws NotFoundException when the user belongs to a different tenant', async () => {
+      const user = { id: '1', email: 'bob@x.com', tenantId: 'tenant-2' };
+      mockPrismaService.user.findUnique.mockResolvedValue(user);
+
+      await expect(service.findByIdForTenant('1', 'tenant-1')).rejects.toThrow(
+        NotFoundException,
+      );
     });
   });
 
@@ -175,14 +187,16 @@ describe('UsersService', () => {
     });
   });
 
-  describe('updateUser', () => {
+  describe('updateUserForTenant', () => {
     const dto: UpdateUserDto = { name: 'New Name' };
+    const existingUser = { id: '1', tenantId: 'tenant-1' };
 
     it('updates and returns the user on success', async () => {
-      const updatedUser = { id: '1', name: 'New Name' };
+      const updatedUser = { id: '1', name: 'New Name', tenantId: 'tenant-1' };
+      mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
       mockPrismaService.user.update.mockResolvedValue(updatedUser);
 
-      const result = await service.updateUser('1', dto);
+      const result = await service.updateUserForTenant('1', 'tenant-1', dto);
 
       expect(result).toEqual(updatedUser);
       expect(mockPrismaService.user.update).toHaveBeenCalledWith({
@@ -191,48 +205,154 @@ describe('UsersService', () => {
       });
     });
 
-    it('throws NotFoundException when the user does not exist (Prisma P2025)', async () => {
-      mockPrismaService.user.update.mockRejectedValue(prismaKnownError('P2025'));
+    it('throws NotFoundException when the user does not exist', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(null);
 
-      await expect(service.updateUser('missing-id', dto)).rejects.toThrow(NotFoundException);
+      await expect(service.updateUserForTenant('missing-id', 'tenant-1', dto)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the user belongs to a different tenant', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({ id: '1', tenantId: 'tenant-2' });
+
+      await expect(service.updateUserForTenant('1', 'tenant-1', dto)).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
     });
 
     it('throws ConflictException when the new email collides with another user (Prisma P2002)', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
       mockPrismaService.user.update.mockRejectedValue(prismaKnownError('P2002'));
 
-      await expect(service.updateUser('1', { email: 'taken@x.com' })).rejects.toThrow(
-        ConflictException,
-      );
+      await expect(
+        service.updateUserForTenant('1', 'tenant-1', { email: 'taken@x.com' }),
+      ).rejects.toThrow(ConflictException);
     });
 
     it('rethrows unrelated errors instead of swallowing them', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
       mockPrismaService.user.update.mockRejectedValue(new Error('unexpected failure'));
 
-      await expect(service.updateUser('1', dto)).rejects.toThrow('unexpected failure');
+      await expect(service.updateUserForTenant('1', 'tenant-1', dto)).rejects.toThrow(
+        'unexpected failure',
+      );
     });
   });
 
-  describe('removeUser', () => {
+  describe('removeUserForTenant', () => {
+    const existingUser = { id: '1', tenantId: 'tenant-1' };
+
     it('deletes and returns the user on success', async () => {
-      const deletedUser = { id: '1' };
-      mockPrismaService.user.delete.mockResolvedValue(deletedUser);
+      mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
+      mockPrismaService.user.delete.mockResolvedValue(existingUser);
 
-      const result = await service.removeUser('1');
+      const result = await service.removeUserForTenant('1', 'tenant-1');
 
-      expect(result).toEqual(deletedUser);
+      expect(result).toEqual(existingUser);
       expect(mockPrismaService.user.delete).toHaveBeenCalledWith({ where: { id: '1' } });
     });
 
-    it('throws NotFoundException when the user does not exist (Prisma P2025)', async () => {
-      mockPrismaService.user.delete.mockRejectedValue(prismaKnownError('P2025'));
+    it('throws NotFoundException when the user does not exist', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(null);
 
-      await expect(service.removeUser('missing-id')).rejects.toThrow(NotFoundException);
+      await expect(service.removeUserForTenant('missing-id', 'tenant-1')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(mockPrismaService.user.delete).not.toHaveBeenCalled();
     });
 
-    it('rethrows unrelated errors instead of swallowing them', async () => {
-      mockPrismaService.user.delete.mockRejectedValue(new Error('unexpected failure'));
+    it('throws NotFoundException when the user belongs to a different tenant', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({ id: '1', tenantId: 'tenant-2' });
 
-      await expect(service.removeUser('1')).rejects.toThrow('unexpected failure');
+      await expect(service.removeUserForTenant('1', 'tenant-1')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(mockPrismaService.user.delete).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('changeRoleForTenant', () => {
+    it('changes the role when the target is not an Admin', async () => {
+      const existingUser = { id: '1', tenantId: 'tenant-1', role: UserRole.ANALYST };
+      const updatedUser = { ...existingUser, role: UserRole.VIEWER };
+      mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
+      mockPrismaService.user.update.mockResolvedValue(updatedUser);
+
+      const result = await service.changeRoleForTenant('1', 'tenant-1', UserRole.VIEWER);
+
+      expect(mockPrismaService.user.count).not.toHaveBeenCalled();
+      expect(mockPrismaService.user.update).toHaveBeenCalledWith({
+        where: { id: '1' },
+        data: { role: UserRole.VIEWER },
+      });
+      expect(result).toEqual(updatedUser);
+    });
+
+    it('promotes a non-Admin to Admin without checking the admin count', async () => {
+      const existingUser = { id: '1', tenantId: 'tenant-1', role: UserRole.ANALYST };
+      mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
+      mockPrismaService.user.update.mockResolvedValue({ ...existingUser, role: UserRole.ADMIN });
+
+      await service.changeRoleForTenant('1', 'tenant-1', UserRole.ADMIN);
+
+      expect(mockPrismaService.user.count).not.toHaveBeenCalled();
+      expect(mockPrismaService.user.update).toHaveBeenCalledWith({
+        where: { id: '1' },
+        data: { role: UserRole.ADMIN },
+      });
+    });
+
+    it('demotes an Admin when other Admins remain in the tenant', async () => {
+      const existingUser = { id: '1', tenantId: 'tenant-1', role: UserRole.ADMIN };
+      mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
+      mockPrismaService.user.count.mockResolvedValue(2);
+      mockPrismaService.user.update.mockResolvedValue({ ...existingUser, role: UserRole.ANALYST });
+
+      await service.changeRoleForTenant('1', 'tenant-1', UserRole.ANALYST);
+
+      expect(mockPrismaService.user.count).toHaveBeenCalledWith({
+        where: { tenantId: 'tenant-1', role: UserRole.ADMIN },
+      });
+      expect(mockPrismaService.user.update).toHaveBeenCalledWith({
+        where: { id: '1' },
+        data: { role: UserRole.ANALYST },
+      });
+    });
+
+    it('throws ConflictException when demoting the last remaining Admin', async () => {
+      const existingUser = { id: '1', tenantId: 'tenant-1', role: UserRole.ADMIN };
+      mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
+      mockPrismaService.user.count.mockResolvedValue(1);
+
+      await expect(
+        service.changeRoleForTenant('1', 'tenant-1', UserRole.ANALYST),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the user does not exist', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.changeRoleForTenant('missing-id', 'tenant-1', UserRole.VIEWER),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the user belongs to a different tenant', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        id: '1',
+        tenantId: 'tenant-2',
+        role: UserRole.ANALYST,
+      });
+
+      await expect(
+        service.changeRoleForTenant('1', 'tenant-1', UserRole.VIEWER),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
     });
   });
 });
