@@ -8,6 +8,9 @@ import { UserRole } from '../generated/prisma/client';
 
 jest.mock('argon2');
 
+const DUMMY_HASH =
+  '$argon2id$v=19$m=65536,t=3,p=4$GI8yFc6QCemSdwM0skhZvg$3elgnlxE0oIy891fIvSi8cabR0CpJgR2fGQ/xqKpOys';
+
 const mockUsersService = {
   findByEmail: jest.fn(),
   requestPasswordReset: jest.fn(),
@@ -75,11 +78,22 @@ describe('AuthService', () => {
 
     it('throws UnauthorizedException when no user matches the email', async () => {
       mockUsersService.findByEmail.mockResolvedValue(null);
+      (argon2.verify as jest.Mock).mockResolvedValue(false);
 
       await expect(
         service.validateUser('missing@x.com', 'whatever'),
       ).rejects.toThrow(UnauthorizedException);
-      expect(argon2.verify).not.toHaveBeenCalled();
+    });
+
+    it('still runs argon2.verify against a dummy hash when no user matches, to avoid a timing side-channel that would let an attacker enumerate valid emails by response time', async () => {
+      mockUsersService.findByEmail.mockResolvedValue(null);
+      (argon2.verify as jest.Mock).mockResolvedValue(false);
+
+      await expect(
+        service.validateUser('missing@x.com', 'whatever'),
+      ).rejects.toThrow(UnauthorizedException);
+
+      expect(argon2.verify).toHaveBeenCalledWith(DUMMY_HASH, 'whatever');
     });
 
     it('throws UnauthorizedException when the password is wrong', async () => {

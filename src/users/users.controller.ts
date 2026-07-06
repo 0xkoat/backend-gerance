@@ -182,6 +182,11 @@ export class UsersController {
     if (!user.tenantId) {
       throw new ForbiddenException('This account is not scoped to a tenant');
     }
+    if (id === user.userId) {
+      throw new ForbiddenException(
+        'Use the change-password endpoint to update your own password',
+      );
+    }
 
     await this.usersService.resetPasswordForTenant(
       id,

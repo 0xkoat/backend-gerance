@@ -593,6 +593,17 @@ describe('UsersController (e2e)', () => {
         .expect(403);
     });
 
+    it('rejects an Admin targeting their own account, without calling the service', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .post(`/users/${adminUser.id}/reset-password`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ newPassword: 'New-password1!' })
+        .expect(403);
+      expect(mockUsersService.resetPasswordForTenant).not.toHaveBeenCalled();
+    });
+
     it('returns 404 when the target user does not exist in the tenant', async () => {
       const token = await loginAs(adminUser.email);
       mockUsersService.resetPasswordForTenant.mockRejectedValue(
