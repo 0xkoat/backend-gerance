@@ -48,6 +48,7 @@ describe('AppController (e2e)', () => {
       .compile();
 
     app = moduleFixture.createNestApplication();
+    app.setGlobalPrefix('api');
     app.use(helmet());
     app.useGlobalPipes(
       new ValidationPipe({
@@ -64,14 +65,14 @@ describe('AppController (e2e)', () => {
   });
 
   it('rejects a protected route with no token', () => {
-    return request(app.getHttpServer()).get('/').expect(401);
+    return request(app.getHttpServer()).get('/api/').expect(401);
   });
 
   it('logs in with valid credentials and returns an access_token', async () => {
     mockUsersService.findByEmail.mockResolvedValue(dbUser);
 
     const response = await request(app.getHttpServer())
-      .post('/auth/login')
+      .post('/api/auth/login')
       .send({ email: 'bob@x.com', password: 'Correct-password1!' })
       .expect(200);
 
@@ -83,7 +84,7 @@ describe('AppController (e2e)', () => {
     mockUsersService.findByEmail.mockResolvedValue(dbUser);
 
     return request(app.getHttpServer())
-      .post('/auth/login')
+      .post('/api/auth/login')
       .send({ email: 'bob@x.com', password: 'wrong-password' })
       .expect(401);
   });
@@ -92,7 +93,7 @@ describe('AppController (e2e)', () => {
     mockUsersService.findByEmail.mockResolvedValue(dbUser);
 
     const loginResponse = await request(app.getHttpServer())
-      .post('/auth/login')
+      .post('/api/auth/login')
       .send({ email: 'bob@x.com', password: 'Correct-password1!' })
       .expect(200);
 
@@ -101,7 +102,7 @@ describe('AppController (e2e)', () => {
     };
 
     return request(app.getHttpServer())
-      .get('/')
+      .get('/api/')
       .set('Authorization', `Bearer ${token}`)
       .expect(200)
       .expect('Hello World!');
@@ -111,7 +112,7 @@ describe('AppController (e2e)', () => {
     mockUsersService.findByEmail.mockResolvedValue(dbUser);
 
     const response = await request(app.getHttpServer())
-      .post('/auth/login')
+      .post('/api/auth/login')
       .send({ email: 'bob@x.com', password: 'Correct-password1!' })
       .expect(200);
 
@@ -123,7 +124,7 @@ describe('AppController (e2e)', () => {
       mockUsersService.requestPasswordReset.mockResolvedValue(undefined);
 
       const response = await request(app.getHttpServer())
-        .post('/auth/forgot-password')
+        .post('/api/auth/forgot-password')
         .send({ email: 'bob@x.com' })
         .expect(200);
 
@@ -140,7 +141,7 @@ describe('AppController (e2e)', () => {
       mockUsersService.requestPasswordReset.mockResolvedValue(undefined);
 
       const response = await request(app.getHttpServer())
-        .post('/auth/forgot-password')
+        .post('/api/auth/forgot-password')
         .send({ email: 'missing@x.com' })
         .expect(200);
 
@@ -154,14 +155,14 @@ describe('AppController (e2e)', () => {
       mockUsersService.requestPasswordReset.mockResolvedValue(undefined);
 
       return request(app.getHttpServer())
-        .post('/auth/forgot-password')
+        .post('/api/auth/forgot-password')
         .send({ email: 'bob@x.com' })
         .expect(200);
     });
 
     it('rejects an invalid email format', () => {
       return request(app.getHttpServer())
-        .post('/auth/forgot-password')
+        .post('/api/auth/forgot-password')
         .send({ email: 'not-an-email' })
         .expect(400);
     });
@@ -170,7 +171,7 @@ describe('AppController (e2e)', () => {
   describe('security headers', () => {
     it('applies helmet headers to responses', async () => {
       const response = await request(app.getHttpServer())
-        .post('/auth/forgot-password')
+        .post('/api/auth/forgot-password')
         .send({ email: 'bob@x.com' })
         .expect(200);
 
@@ -186,13 +187,13 @@ describe('AppController (e2e)', () => {
 
       for (let i = 0; i < 5; i++) {
         await request(app.getHttpServer())
-          .post('/auth/login')
+          .post('/api/auth/login')
           .send({ email: 'bob@x.com', password: 'wrong-password' })
           .expect(401);
       }
 
       await request(app.getHttpServer())
-        .post('/auth/login')
+        .post('/api/auth/login')
         .send({ email: 'bob@x.com', password: 'wrong-password' })
         .expect(429);
     });

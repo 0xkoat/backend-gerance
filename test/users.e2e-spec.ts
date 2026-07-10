@@ -102,7 +102,7 @@ describe('UsersController (e2e)', () => {
 
   async function loginAs(email: string): Promise<string> {
     const response = await request(app.getHttpServer())
-      .post('/auth/login')
+      .post('/api/auth/login')
       .send({ email, password: PASSWORD })
       .expect(200);
 
@@ -133,6 +133,7 @@ describe('UsersController (e2e)', () => {
       .compile();
 
     app = moduleFixture.createNestApplication();
+    app.setGlobalPrefix('api');
     app.useGlobalPipes(
       new ValidationPipe({
         whitelist: true,
@@ -156,7 +157,7 @@ describe('UsersController (e2e)', () => {
       });
 
       const response = await request(app.getHttpServer())
-        .get('/users/me')
+        .get('/api/users/me')
         .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
@@ -165,14 +166,14 @@ describe('UsersController (e2e)', () => {
     });
 
     it('rejects a request with no token', () => {
-      return request(app.getHttpServer()).get('/users/me').expect(401);
+      return request(app.getHttpServer()).get('/api/users/me').expect(401);
     });
 
     it('rejects a caller not scoped to a tenant', async () => {
       const token = await loginAs(noTenantAdminUser.email);
 
       await request(app.getHttpServer())
-        .get('/users/me')
+        .get('/api/users/me')
         .set('Authorization', `Bearer ${token}`)
         .expect(403);
     });
@@ -197,7 +198,7 @@ describe('UsersController (e2e)', () => {
       });
 
       const response = await request(app.getHttpServer())
-        .post('/users')
+        .post('/api/users')
         .set('Authorization', `Bearer ${token}`)
         .send(createBody)
         .expect(201);
@@ -214,7 +215,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(analystUser.email);
 
       await request(app.getHttpServer())
-        .post('/users')
+        .post('/api/users')
         .set('Authorization', `Bearer ${token}`)
         .send(createBody)
         .expect(403);
@@ -225,7 +226,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(viewerUser.email);
 
       await request(app.getHttpServer())
-        .post('/users')
+        .post('/api/users')
         .set('Authorization', `Bearer ${token}`)
         .send(createBody)
         .expect(403);
@@ -235,7 +236,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(adminUser.email);
 
       await request(app.getHttpServer())
-        .post('/users')
+        .post('/api/users')
         .set('Authorization', `Bearer ${token}`)
         .send({ ...createBody, role: UserRole.SUPER_ADMIN })
         .expect(400);
@@ -246,7 +247,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(adminUser.email);
 
       await request(app.getHttpServer())
-        .post('/users')
+        .post('/api/users')
         .set('Authorization', `Bearer ${token}`)
         .send({ email: createBody.email })
         .expect(400);
@@ -262,7 +263,7 @@ describe('UsersController (e2e)', () => {
       ]);
 
       const response = await request(app.getHttpServer())
-        .get('/users')
+        .get('/api/users')
         .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
@@ -279,7 +280,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(viewerUser.email);
 
       await request(app.getHttpServer())
-        .get('/users')
+        .get('/api/users')
         .set('Authorization', `Bearer ${token}`)
         .expect(403);
     });
@@ -294,7 +295,7 @@ describe('UsersController (e2e)', () => {
       });
 
       const response = await request(app.getHttpServer())
-        .get(`/users/${analystUser.id}`)
+        .get(`/api/users/${analystUser.id}`)
         .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
@@ -308,7 +309,7 @@ describe('UsersController (e2e)', () => {
       );
 
       await request(app.getHttpServer())
-        .get('/users/missing-id')
+        .get('/api/users/missing-id')
         .set('Authorization', `Bearer ${token}`)
         .expect(404);
     });
@@ -317,7 +318,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(analystUser.email);
 
       await request(app.getHttpServer())
-        .get(`/users/${adminUser.id}`)
+        .get(`/api/users/${adminUser.id}`)
         .set('Authorization', `Bearer ${token}`)
         .expect(403);
     });
@@ -333,7 +334,7 @@ describe('UsersController (e2e)', () => {
       });
 
       const response = await request(app.getHttpServer())
-        .patch(`/users/${analystUser.id}`)
+        .patch(`/api/users/${analystUser.id}`)
         .set('Authorization', `Bearer ${token}`)
         .send({ name: 'Updated Name' })
         .expect(200);
@@ -346,7 +347,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(adminUser.email);
 
       await request(app.getHttpServer())
-        .patch(`/users/${analystUser.id}`)
+        .patch(`/api/users/${analystUser.id}`)
         .set('Authorization', `Bearer ${token}`)
         .send({ role: UserRole.ADMIN })
         .expect(400);
@@ -357,7 +358,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(viewerUser.email);
 
       await request(app.getHttpServer())
-        .patch(`/users/${analystUser.id}`)
+        .patch(`/api/users/${analystUser.id}`)
         .set('Authorization', `Bearer ${token}`)
         .send({ name: 'Nope' })
         .expect(403);
@@ -374,7 +375,7 @@ describe('UsersController (e2e)', () => {
       });
 
       const response = await request(app.getHttpServer())
-        .patch(`/users/${analystUser.id}/role`)
+        .patch(`/api/users/${analystUser.id}/role`)
         .set('Authorization', `Bearer ${token}`)
         .send({ role: UserRole.VIEWER })
         .expect(200);
@@ -391,7 +392,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(adminUser.email);
 
       await request(app.getHttpServer())
-        .patch(`/users/${adminUser.id}/role`)
+        .patch(`/api/users/${adminUser.id}/role`)
         .set('Authorization', `Bearer ${token}`)
         .send({ role: UserRole.ANALYST })
         .expect(403);
@@ -407,7 +408,7 @@ describe('UsersController (e2e)', () => {
       );
 
       await request(app.getHttpServer())
-        .patch(`/users/${analystUser.id}/role`)
+        .patch(`/api/users/${analystUser.id}/role`)
         .set('Authorization', `Bearer ${token}`)
         .send({ role: UserRole.VIEWER })
         .expect(409);
@@ -417,7 +418,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(adminUser.email);
 
       await request(app.getHttpServer())
-        .patch(`/users/${analystUser.id}/role`)
+        .patch(`/api/users/${analystUser.id}/role`)
         .set('Authorization', `Bearer ${token}`)
         .send({ role: UserRole.SUPER_ADMIN })
         .expect(400);
@@ -428,7 +429,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(analystUser.email);
 
       await request(app.getHttpServer())
-        .patch(`/users/${viewerUser.id}/role`)
+        .patch(`/api/users/${viewerUser.id}/role`)
         .set('Authorization', `Bearer ${token}`)
         .send({ role: UserRole.VIEWER })
         .expect(403);
@@ -444,7 +445,7 @@ describe('UsersController (e2e)', () => {
       });
 
       const response = await request(app.getHttpServer())
-        .delete(`/users/${analystUser.id}`)
+        .delete(`/api/users/${analystUser.id}`)
         .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
@@ -458,7 +459,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(adminUser.email);
 
       await request(app.getHttpServer())
-        .delete(`/users/${adminUser.id}`)
+        .delete(`/api/users/${adminUser.id}`)
         .set('Authorization', `Bearer ${token}`)
         .expect(403);
       expect(mockUsersService.removeUserForTenant).not.toHaveBeenCalled();
@@ -468,7 +469,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(viewerUser.email);
 
       await request(app.getHttpServer())
-        .delete(`/users/${analystUser.id}`)
+        .delete(`/api/users/${analystUser.id}`)
         .set('Authorization', `Bearer ${token}`)
         .expect(403);
     });
@@ -485,7 +486,7 @@ describe('UsersController (e2e)', () => {
       });
 
       const response = await request(app.getHttpServer())
-        .patch('/users/me/password')
+        .patch('/api/users/me/password')
         .set('Authorization', `Bearer ${token}`)
         .send({ currentPassword: PASSWORD, newPassword: 'New-password1!' })
         .expect(200);
@@ -509,7 +510,7 @@ describe('UsersController (e2e)', () => {
       );
 
       await request(app.getHttpServer())
-        .patch('/users/me/password')
+        .patch('/api/users/me/password')
         .set('Authorization', `Bearer ${token}`)
         .send({
           currentPassword: 'wrong-password',
@@ -522,7 +523,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(adminUser.email);
 
       await request(app.getHttpServer())
-        .patch('/users/me/password')
+        .patch('/api/users/me/password')
         .set('Authorization', `Bearer ${token}`)
         .send({ currentPassword: PASSWORD, newPassword: 'weak' })
         .expect(400);
@@ -531,7 +532,7 @@ describe('UsersController (e2e)', () => {
 
     it('rejects a request with no token', () => {
       return request(app.getHttpServer())
-        .patch('/users/me/password')
+        .patch('/api/users/me/password')
         .send({ currentPassword: PASSWORD, newPassword: 'New-password1!' })
         .expect(401);
     });
@@ -546,7 +547,7 @@ describe('UsersController (e2e)', () => {
       });
 
       await request(app.getHttpServer())
-        .patch('/users/me/password')
+        .patch('/api/users/me/password')
         .set('Authorization', `Bearer ${token}`)
         .send({ currentPassword: PASSWORD, newPassword: 'New-password1!' })
         .expect(200);
@@ -559,7 +560,7 @@ describe('UsersController (e2e)', () => {
       mockUsersService.resetPasswordForTenant.mockResolvedValue(undefined);
 
       const response = await request(app.getHttpServer())
-        .post(`/users/${analystUser.id}/reset-password`)
+        .post(`/api/users/${analystUser.id}/reset-password`)
         .set('Authorization', `Bearer ${token}`)
         .send({ newPassword: 'New-password1!' })
         .expect(201);
@@ -576,7 +577,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(adminUser.email);
 
       await request(app.getHttpServer())
-        .post(`/users/${analystUser.id}/reset-password`)
+        .post(`/api/users/${analystUser.id}/reset-password`)
         .set('Authorization', `Bearer ${token}`)
         .send({ newPassword: 'weak' })
         .expect(400);
@@ -587,7 +588,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(analystUser.email);
 
       await request(app.getHttpServer())
-        .post(`/users/${viewerUser.id}/reset-password`)
+        .post(`/api/users/${viewerUser.id}/reset-password`)
         .set('Authorization', `Bearer ${token}`)
         .send({ newPassword: 'New-password1!' })
         .expect(403);
@@ -597,7 +598,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(adminUser.email);
 
       await request(app.getHttpServer())
-        .post(`/users/${adminUser.id}/reset-password`)
+        .post(`/api/users/${adminUser.id}/reset-password`)
         .set('Authorization', `Bearer ${token}`)
         .send({ newPassword: 'New-password1!' })
         .expect(403);
@@ -611,7 +612,7 @@ describe('UsersController (e2e)', () => {
       );
 
       await request(app.getHttpServer())
-        .post('/users/missing-id/reset-password')
+        .post('/api/users/missing-id/reset-password')
         .set('Authorization', `Bearer ${token}`)
         .send({ newPassword: 'New-password1!' })
         .expect(404);
@@ -623,7 +624,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(resetPendingUser.email);
 
       await request(app.getHttpServer())
-        .get('/users/me')
+        .get('/api/users/me')
         .set('Authorization', `Bearer ${token}`)
         .expect(403);
     });
@@ -638,7 +639,7 @@ describe('UsersController (e2e)', () => {
       });
 
       await request(app.getHttpServer())
-        .patch('/users/me/password')
+        .patch('/api/users/me/password')
         .set('Authorization', `Bearer ${token}`)
         .send({ currentPassword: PASSWORD, newPassword: 'New-password1!' })
         .expect(200);
@@ -652,7 +653,7 @@ describe('UsersController (e2e)', () => {
       });
 
       await request(app.getHttpServer())
-        .get('/users/me')
+        .get('/api/users/me')
         .set('Authorization', `Bearer ${token}`)
         .expect(200);
     });
