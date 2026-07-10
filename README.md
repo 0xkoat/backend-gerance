@@ -69,10 +69,30 @@ Rules:
   field.
 - The first Super Admin is bootstrapped by a one-time seed script, not an API call.
 
+## Environment variables
+
+Copy `.env.example` to `.env` and fill in:
+
+- `DATABASE_URL` — PostgreSQL connection string.
+- `JWT_SECRET` — required; the app fails fast on startup if it's missing.
+
 ## Project setup
 
 ```bash
 $ npm install
+```
+
+## Database setup
+
+```bash
+# apply migrations
+$ npx prisma migrate deploy
+
+# generate the Prisma client (required before running or testing)
+$ npx prisma generate
+
+# bootstrap the first Super Admin(s) — reads prisma/seed-data.json (gitignored)
+$ npx prisma db seed
 ```
 
 ## Compile and run the project
@@ -87,6 +107,17 @@ $ npm run start:dev
 # production mode
 $ npm run start:prod
 ```
+
+## API
+
+All routes are served under a global `/api` prefix (e.g. `POST /api/auth/login`).
+
+- `GET /api/health` — public health check (database + memory), useful for uptime monitoring
+  and quick debugging of which dependency is down.
+- A Postman collection is available in `postman/` (with automatic bearer-token propagation
+  from login responses) for manual testing.
+- Security baseline: `helmet()` security headers (HSTS with preload), and rate limiting
+  (`@nestjs/throttler`) on top of JWT + role-based guards on every route.
 
 ## Run tests
 

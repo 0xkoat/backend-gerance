@@ -82,6 +82,39 @@ Hard rules that follow from this:
   to enumerate which emails have accounts (argon2's cost makes the found-vs-not-found timing
   gap large enough to be trivially measurable otherwise; verified empirically at ~78ms).
 
+# API surface & operational hardening
+
+- All routes are served under a global `/api` prefix (`app.setGlobalPrefix('api')` in
+  `main.ts`) — e.g. `POST /api/auth/login`, not `POST /auth/login`. Any new e2e test must
+  hit paths under `/api/...`.
+- `GET /api/health` — public (`@Public()`, bypasses JWT), backed by `@nestjs/terminus`.
+  Aggregates three independently-reported checks: `database` (a real Prisma ping query,
+  not just "is the process alive"), `memory_heap`, `memory_rss` (300MB threshold each).
+  Returns `200` with all components `up`, or `503` with the failing component(s) isolated
+  under `error` while healthy ones stay under `info` — this is what makes it useful for
+  debugging: an on-call engineer immediately sees *which* dependency broke instead of just
+  "something's down." Deliberately one aggregate endpoint with a per-component breakdown,
+  not one route per module — `users`/`tenants`/`auth` all share the same single failure
+  mode today (Postgres down), so a per-module route would just triplicate the same check.
+  Add new named indicators here (not new routes) once modules gain their own independent
+  external dependencies (e.g. SIEM's Elastic cluster).
+- `helmet()` in `main.ts` sets standard security response headers (CSP, `X-Frame-Options`,
+  `X-Content-Type-Options`, etc.). HSTS is explicitly configured (not left at helmet's
+  default) with `maxAge: 63072000` (2 years), `includeSubDomains: true`, and `preload: true`
+  — the `preload` flag alone does nothing without the extra manual step of submitting the
+  production domain at hstspreload.org; do that only once the production domain is final,
+  since preload-list removal is slow (tied to browser release cycles) and effectively
+  permanent in practice. Never submit a dev/staging domain by mistake.
+- CI (`.github/workflows/test.yml`) runs `npx prisma generate` before `npx prisma migrate
+  deploy` / `npm test` / `npm run test:e2e`. This is required, not optional: `src/generated/
+  prisma` is gitignored, and `migrate deploy` only applies SQL migrations — it does not
+  generate the TypeScript client. Without this step every suite importing from
+  `../generated/prisma/*` fails with `Cannot find module` on a clean checkout (this exact
+  failure happened and was diagnosed via CI logs before the fix was added).
+- Frontend types are hand-maintained (not generated) to match the shapes documented in
+  root `CLAUDE.md`'s "Backend API contract" section — deliberate choice, safest option for
+  a production API surface, at the cost of manual sync when a DTO changes.
+
 # Conventions
 
 - Don't guess at vulnerabilities or root causes — enumerate and verify first
