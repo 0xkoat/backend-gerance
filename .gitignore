@@ -22,4 +22,4 @@ yarn-error.log*
 Thumbs.db
 
 /src/generated/prisma
-postman
+postman/
