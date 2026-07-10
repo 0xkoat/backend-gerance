@@ -9,7 +9,15 @@ declare const module: any;
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 
-  app.use(helmet());
+  app.use(
+    helmet({
+      hsts: {
+        maxAge: 63072000, // 2 years, in seconds — hstspreload.org requires >= 1 year
+        includeSubDomains: true,
+        preload: true,
+      },
+    }),
+  );
 
   app.setGlobalPrefix('api');
 
