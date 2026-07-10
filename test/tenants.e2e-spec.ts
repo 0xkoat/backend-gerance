@@ -72,7 +72,7 @@ describe('TenantsController (e2e)', () => {
 
   async function loginAs(email: string): Promise<string> {
     const response = await request(app.getHttpServer())
-      .post('/auth/login')
+      .post('/api/auth/login')
       .send({ email, password: PASSWORD })
       .expect(200);
 
@@ -100,6 +100,7 @@ describe('TenantsController (e2e)', () => {
       .compile();
 
     app = moduleFixture.createNestApplication();
+    app.setGlobalPrefix('api');
     app.useGlobalPipes(
       new ValidationPipe({
         whitelist: true,
@@ -142,7 +143,7 @@ describe('TenantsController (e2e)', () => {
       });
 
       const response = await request(app.getHttpServer())
-        .post('/tenants')
+        .post('/api/tenants')
         .set('Authorization', `Bearer ${token}`)
         .send(createBody)
         .expect(201);
@@ -161,7 +162,7 @@ describe('TenantsController (e2e)', () => {
       const token = await loginAs(adminUser.email);
 
       await request(app.getHttpServer())
-        .post('/tenants')
+        .post('/api/tenants')
         .set('Authorization', `Bearer ${token}`)
         .send(createBody)
         .expect(403);
@@ -170,7 +171,7 @@ describe('TenantsController (e2e)', () => {
 
     it('rejects a request with no token', () => {
       return request(app.getHttpServer())
-        .post('/tenants')
+        .post('/api/tenants')
         .send(createBody)
         .expect(401);
     });
@@ -179,7 +180,7 @@ describe('TenantsController (e2e)', () => {
       const token = await loginAs(superAdminUser.email);
 
       await request(app.getHttpServer())
-        .post('/tenants')
+        .post('/api/tenants')
         .set('Authorization', `Bearer ${token}`)
         .send({ tenantName: 'Acme Corp' })
         .expect(400);
@@ -204,7 +205,7 @@ describe('TenantsController (e2e)', () => {
       ]);
 
       const response = await request(app.getHttpServer())
-        .get('/tenants')
+        .get('/api/tenants')
         .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
@@ -215,7 +216,7 @@ describe('TenantsController (e2e)', () => {
       const token = await loginAs(adminUser.email);
 
       await request(app.getHttpServer())
-        .get('/tenants')
+        .get('/api/tenants')
         .set('Authorization', `Bearer ${token}`)
         .expect(403);
     });
@@ -231,7 +232,7 @@ describe('TenantsController (e2e)', () => {
       });
 
       const response = await request(app.getHttpServer())
-        .get('/tenants/tenant-1')
+        .get('/api/tenants/tenant-1')
         .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
@@ -246,7 +247,7 @@ describe('TenantsController (e2e)', () => {
       mockPrismaService.tenant.findUnique.mockResolvedValue(null);
 
       await request(app.getHttpServer())
-        .get('/tenants/missing-id')
+        .get('/api/tenants/missing-id')
         .set('Authorization', `Bearer ${token}`)
         .expect(404);
     });
@@ -255,7 +256,7 @@ describe('TenantsController (e2e)', () => {
       const token = await loginAs(adminUser.email);
 
       await request(app.getHttpServer())
-        .get('/tenants/tenant-1')
+        .get('/api/tenants/tenant-1')
         .set('Authorization', `Bearer ${token}`)
         .expect(403);
     });
@@ -280,7 +281,7 @@ describe('TenantsController (e2e)', () => {
       ]);
 
       const response = await request(app.getHttpServer())
-        .delete('/tenants/tenant-1')
+        .delete('/api/tenants/tenant-1')
         .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
@@ -296,7 +297,7 @@ describe('TenantsController (e2e)', () => {
       mockPrismaService.tenant.findUnique.mockResolvedValue(null);
 
       await request(app.getHttpServer())
-        .delete('/tenants/missing-id')
+        .delete('/api/tenants/missing-id')
         .set('Authorization', `Bearer ${token}`)
         .expect(404);
       expect(mockPrismaService.$transaction).not.toHaveBeenCalled();
@@ -306,7 +307,7 @@ describe('TenantsController (e2e)', () => {
       const token = await loginAs(adminUser.email);
 
       await request(app.getHttpServer())
-        .delete('/tenants/tenant-1')
+        .delete('/api/tenants/tenant-1')
         .set('Authorization', `Bearer ${token}`)
         .expect(403);
       expect(mockPrismaService.$transaction).not.toHaveBeenCalled();
@@ -314,7 +315,7 @@ describe('TenantsController (e2e)', () => {
 
     it('rejects a request with no token', () => {
       return request(app.getHttpServer())
-        .delete('/tenants/tenant-1')
+        .delete('/api/tenants/tenant-1')
         .expect(401);
     });
   });
