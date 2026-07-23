@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Delete,
+  Query,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { UsersService } from './users.service';
@@ -19,6 +20,7 @@ import { UpdateUserDto } from './dto/updateUser.dto';
 import { ChangeUserRoleDto } from './dto/changeUserRole.dto';
 import { ChangePasswordDto } from './dto/changePassword.dto';
 import { ResetPasswordDto } from './dto/resetPassword.dto';
+import { ListUsersQueryDto } from './dto/listUsersQuery.dto';
 import { SkipPasswordCheck } from '../auth/decorators/skip-password-check.decorator';
 
 type SafeUser = Omit<User, 'hashedPassword'>;
@@ -99,13 +101,30 @@ export class UsersController {
   @Get()
   async getAllUsers(
     @CurrentUser() user: AuthenticatedUser,
-  ): Promise<SafeUser[]> {
+    @Query() query: ListUsersQueryDto,
+  ): Promise<{
+    users: SafeUser[];
+    total: number;
+    page: number;
+    pageSize: number;
+  }> {
     if (!user.tenantId) {
       throw new ForbiddenException('This account is not scoped to a tenant');
     }
 
-    const users = await this.usersService.findAllForTenant(user.tenantId);
-    return users.map(({ hashedPassword, ...safeUser }) => safeUser);
+    const { users, total, page, pageSize } =
+      await this.usersService.findAllForTenant(
+        user.tenantId,
+        query.page ?? 1,
+        query.pageSize ?? 20,
+      );
+
+    return {
+      users: users.map(({ hashedPassword, ...safeUser }) => safeUser),
+      total,
+      page,
+      pageSize,
+    };
   }
 
   @Roles(UserRole.ADMIN)
@@ -172,13 +191,24 @@ export class UsersController {
     return safeUser;
   }
 
-  @Roles(UserRole.ADMIN)
+  // Super Admin has no tenantId, so it can't go through the tenant-scoped branch below —
+  // see UsersService.resetSoleAdminPassword for why this path only works when the target
+  // Admin has no co-Admin to handle the reset themselves.
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
   @Post(':id/reset-password')
   async resetUserPassword(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
     @Body() resetPasswordDto: ResetPasswordDto,
   ): Promise<{ message: string }> {
+    if (user.role === UserRole.SUPER_ADMIN) {
+      await this.usersService.resetSoleAdminPassword(
+        id,
+        resetPasswordDto.newPassword,
+      );
+      return { message: 'Password reset successfully' };
+    }
+
     if (!user.tenantId) {
       throw new ForbiddenException('This account is not scoped to a tenant');
     }

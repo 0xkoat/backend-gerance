@@ -33,10 +33,18 @@ export class UsersService {
     return user;
   }
 
-  async findAllForTenant(tenantId: string) {
-    return this.prisma.user.findMany({
-      where: { tenantId },
-    });
+  async findAllForTenant(tenantId: string, page: number, pageSize: number) {
+    const [users, total] = await this.prisma.$transaction([
+      this.prisma.user.findMany({
+        where: { tenantId },
+        orderBy: { createdAt: 'asc' },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      this.prisma.user.count({ where: { tenantId } }),
+    ]);
+
+    return { users, total, page, pageSize };
   }
 
   async createUser(
@@ -175,7 +183,38 @@ export class UsersService {
     newPassword: string,
   ): Promise<void> {
     await this.findByIdForTenant(id, tenantId);
+    await this.applyPasswordReset(id, newPassword);
+  }
 
+  // Escalation path for a tenant with no co-Admin to handle the reset themselves: a Super
+  // Admin may reset an Admin's password, but only when that Admin is the tenant's sole
+  // Admin — if a co-Admin exists, they're expected to use resetPasswordForTenant instead
+  // (an Admin can already reset a co-Admin's password), keeping the Super Admin out of a
+  // tenant's day-to-day account administration whenever there's an in-tenant alternative.
+  async resetSoleAdminPassword(id: string, newPassword: string): Promise<void> {
+    const target = await this.prisma.user.findUnique({ where: { id } });
+
+    if (!target || target.role !== UserRole.ADMIN || !target.tenantId) {
+      throw new NotFoundException('Admin not found');
+    }
+
+    const adminCount = await this.prisma.user.count({
+      where: { tenantId: target.tenantId, role: UserRole.ADMIN },
+    });
+
+    if (adminCount > 1) {
+      throw new ConflictException(
+        'This tenant has other Admins who can reset this password',
+      );
+    }
+
+    await this.applyPasswordReset(id, newPassword);
+  }
+
+  private async applyPasswordReset(
+    id: string,
+    newPassword: string,
+  ): Promise<void> {
     const hashedPassword = await argon2.hash(newPassword);
 
     await this.prisma.user.update({

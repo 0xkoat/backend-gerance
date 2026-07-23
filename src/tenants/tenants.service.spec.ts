@@ -156,17 +156,38 @@ describe('TenantsService', () => {
   });
 
   describe('findById', () => {
-    it('returns the tenant when found', async () => {
+    it('returns the tenant with its admins, hashed passwords stripped', async () => {
       const tenant = {
         id: 'tenant-1',
         name: 'Acme Corp',
         createdAt: new Date(),
+        users: [
+          {
+            id: 'admin-1',
+            name: 'Alice Admin',
+            role: UserRole.ADMIN,
+            hashedPassword: 'secret-hash',
+          },
+        ],
       };
       mockPrismaService.tenant.findUnique.mockResolvedValue(tenant);
 
       const result = await service.findById('tenant-1');
 
-      expect(result).toEqual(tenant);
+      expect(mockPrismaService.tenant.findUnique).toHaveBeenCalledWith({
+        where: { id: 'tenant-1' },
+        include: {
+          users: {
+            where: { role: UserRole.ADMIN },
+            orderBy: { createdAt: 'asc' },
+          },
+        },
+      });
+      expect(result).not.toHaveProperty('users');
+      expect(result.admins).toEqual([
+        { id: 'admin-1', name: 'Alice Admin', role: UserRole.ADMIN },
+      ]);
+      expect(result.admins[0]).not.toHaveProperty('hashedPassword');
     });
 
     it('throws NotFoundException when no tenant matches', async () => {
@@ -186,7 +207,10 @@ describe('TenantsService', () => {
     };
 
     it('deletes all users, all tenant modules, then the tenant, in that order', async () => {
-      mockPrismaService.tenant.findUnique.mockResolvedValue(existingTenant);
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        ...existingTenant,
+        users: [],
+      });
       mockPrismaService.user.deleteMany.mockResolvedValue({ count: 3 });
       mockPrismaService.tenantModule.deleteMany.mockResolvedValue({ count: 2 });
       mockPrismaService.tenant.delete.mockResolvedValue(existingTenant);

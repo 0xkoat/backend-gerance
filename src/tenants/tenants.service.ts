@@ -54,13 +54,23 @@ export class TenantsService {
   async findById(id: string) {
     const tenant = await this.prisma.tenant.findUnique({
       where: { id },
+      include: {
+        users: {
+          where: { role: UserRole.ADMIN },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
     });
 
     if (!tenant) {
       throw new NotFoundException('Tenant not found');
     }
 
-    return tenant;
+    const { users, ...safeTenant } = tenant;
+    return {
+      ...safeTenant,
+      admins: users.map(({ hashedPassword, ...safeAdmin }) => safeAdmin),
+    };
   }
 
   async deleteTenantWithUsers(id: string) {

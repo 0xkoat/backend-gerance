@@ -77,6 +77,14 @@ Hard rules that follow from this:
   `PATCH /users/me/password`, which requires the current password.
 - Demoting a tenant's last remaining Admin to a non-Admin role is rejected
   (`ConflictException`) — every tenant must always have at least one Admin.
+- `POST /users/:id/reset-password` also accepts a `SUPER_ADMIN` caller now (2026-07-23),
+  routed to `UsersService.resetSoleAdminPassword` instead of the tenant-scoped
+  `resetPasswordForTenant` — but only when the target is an Admin with no co-Admin in their
+  tenant (`ConflictException` otherwise: "This tenant has other Admins who can reset this
+  password"). This is the one place a Super Admin acts on an existing Admin rather than just
+  creating one — a deliberate, narrow exception to the hierarchy above, added only because a
+  tenant with a single, locked-out Admin has no other in-tenant way to recover. Both paths
+  converge on the same effect (`mustChangePassword: true`, `passwordResetRequestedAt: null`).
 - Login (`POST /auth/login`) always calls `argon2.verify` — even when the email doesn't
   match any user, it verifies against a fixed dummy hash — so response timing can't be used
   to enumerate which emails have accounts (argon2's cost makes the found-vs-not-found timing
