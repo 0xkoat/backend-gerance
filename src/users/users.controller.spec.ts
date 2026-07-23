@@ -24,6 +24,7 @@ const mockUsersService = {
   removeUserForTenant: jest.fn(),
   changePassword: jest.fn(),
   resetPasswordForTenant: jest.fn(),
+  resetSoleAdminPassword: jest.fn(),
 };
 
 const mockJwtService = {
@@ -43,6 +44,13 @@ describe('UsersController', () => {
   const noTenantAdmin: AuthenticatedUser = {
     userId: 'admin-1',
     role: UserRole.ADMIN,
+    tenantId: null,
+    mustChangePassword: false,
+  };
+
+  const superAdmin: AuthenticatedUser = {
+    userId: 'sa-1',
+    role: UserRole.SUPER_ADMIN,
     tenantId: null,
     mustChangePassword: false,
   };
@@ -143,37 +151,67 @@ describe('UsersController', () => {
   });
 
   describe('getAllUsers', () => {
-    it('returns all tenant users with hashed passwords stripped', async () => {
+    it('returns a page of tenant users with hashed passwords stripped', async () => {
       const secondUser = {
         ...dbUser,
         id: 'user-2',
         hashedPassword: 'other-hash',
       };
-      mockUsersService.findAllForTenant.mockResolvedValue([dbUser, secondUser]);
+      mockUsersService.findAllForTenant.mockResolvedValue({
+        users: [dbUser, secondUser],
+        total: 2,
+        page: 1,
+        pageSize: 20,
+      });
 
-      const result = await controller.getAllUsers(admin);
+      const result = await controller.getAllUsers(admin, {});
 
       expect(mockUsersService.findAllForTenant).toHaveBeenCalledWith(
         'tenant-1',
+        1,
+        20,
       );
-      expect(result).toHaveLength(2);
-      result.forEach((user) =>
+      expect(result.total).toBe(2);
+      expect(result.users).toHaveLength(2);
+      result.users.forEach((user) =>
         expect(user).not.toHaveProperty('hashedPassword'),
       );
     });
 
-    it('returns an empty array when the tenant has no users', async () => {
-      mockUsersService.findAllForTenant.mockResolvedValue([]);
+    it('forwards the requested page and pageSize', async () => {
+      mockUsersService.findAllForTenant.mockResolvedValue({
+        users: [],
+        total: 0,
+        page: 3,
+        pageSize: 5,
+      });
 
-      const result = await controller.getAllUsers(admin);
+      await controller.getAllUsers(admin, { page: 3, pageSize: 5 });
 
-      expect(result).toEqual([]);
+      expect(mockUsersService.findAllForTenant).toHaveBeenCalledWith(
+        'tenant-1',
+        3,
+        5,
+      );
+    });
+
+    it('returns an empty page when the tenant has no users', async () => {
+      mockUsersService.findAllForTenant.mockResolvedValue({
+        users: [],
+        total: 0,
+        page: 1,
+        pageSize: 20,
+      });
+
+      const result = await controller.getAllUsers(admin, {});
+
+      expect(result.users).toEqual([]);
     });
 
     it('throws ForbiddenException when the caller has no tenantId', async () => {
-      await expect(controller.getAllUsers(noTenantAdmin)).rejects.toThrow(
-        ForbiddenException,
-      );
+      await expect(
+        controller.getAllUsers(noTenantAdmin, {}),
+      ).rejects.toThrow(ForbiddenException);
       expect(mockUsersService.findAllForTenant).not.toHaveBeenCalled();
     });
   });
@@ -387,6 +425,37 @@ describe('UsersController', () => {
         }),
       ).rejects.toThrow(ForbiddenException);
       expect(mockUsersService.resetPasswordForTenant).not.toHaveBeenCalled();
+    });
+
+    it('routes a Super Admin caller to resetSoleAdminPassword instead of the tenant-scoped path', async () => {
+      mockUsersService.resetSoleAdminPassword.mockResolvedValue(undefined);
+
+      const result = await controller.resetUserPassword(
+        superAdmin,
+        'admin-1',
+        { newPassword: 'New-password1!' },
+      );
+
+      expect(mockUsersService.resetSoleAdminPassword).toHaveBeenCalledWith(
+        'admin-1',
+        'New-password1!',
+      );
+      expect(mockUsersService.resetPasswordForTenant).not.toHaveBeenCalled();
+      expect(result).toEqual({ message: 'Password reset successfully' });
+    });
+
+    it('propagates a ConflictException from resetSoleAdminPassword when the tenant has a co-Admin', async () => {
+      mockUsersService.resetSoleAdminPassword.mockRejectedValue(
+        new ConflictException(
+          'This tenant has other Admins who can reset this password',
+        ),
+      );
+
+      await expect(
+        controller.resetUserPassword(superAdmin, 'admin-1', {
+          newPassword: 'New-password1!',
+        }),
+      ).rejects.toThrow(ConflictException);
     });
   });
 

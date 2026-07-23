@@ -255,12 +255,17 @@ describe('UsersController (e2e)', () => {
   });
 
   describe('GET /users', () => {
-    it('allows an Admin to list users in their tenant', async () => {
+    it('allows an Admin to list a page of users in their tenant', async () => {
       const token = await loginAs(adminUser.email);
-      mockUsersService.findAllForTenant.mockResolvedValue([
-        { ...adminUser, hashedPassword },
-        { ...analystUser, hashedPassword },
-      ]);
+      mockUsersService.findAllForTenant.mockResolvedValue({
+        users: [
+          { ...adminUser, hashedPassword },
+          { ...analystUser, hashedPassword },
+        ],
+        total: 2,
+        page: 1,
+        pageSize: 20,
+      });
 
       const response = await request(app.getHttpServer())
         .get('/api/users')
@@ -269,10 +274,38 @@ describe('UsersController (e2e)', () => {
 
       expect(mockUsersService.findAllForTenant).toHaveBeenCalledWith(
         adminUser.tenantId,
+        1,
+        20,
       );
-      expect(response.body).toHaveLength(2);
-      (response.body as Array<Record<string, unknown>>).forEach((user) =>
+      const body = response.body as {
+        users: Array<Record<string, unknown>>;
+        total: number;
+      };
+      expect(body.total).toBe(2);
+      expect(body.users).toHaveLength(2);
+      body.users.forEach((user) =>
         expect(user).not.toHaveProperty('hashedPassword'),
+      );
+    });
+
+    it('forwards page and pageSize query params to the service', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.findAllForTenant.mockResolvedValue({
+        users: [],
+        total: 0,
+        page: 2,
+        pageSize: 5,
+      });
+
+      await request(app.getHttpServer())
+        .get('/api/users?page=2&pageSize=5')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(mockUsersService.findAllForTenant).toHaveBeenCalledWith(
+        adminUser.tenantId,
+        2,
+        5,
       );
     });
 

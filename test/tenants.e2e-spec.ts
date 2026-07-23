@@ -223,12 +223,20 @@ describe('TenantsController (e2e)', () => {
   });
 
   describe('GET /tenants/:id', () => {
-    it('allows a Super Admin to fetch a single tenant', async () => {
+    it('allows a Super Admin to fetch a single tenant with its Admins', async () => {
       const token = await loginAs(superAdminUser.email);
       mockPrismaService.tenant.findUnique.mockResolvedValue({
         id: 'tenant-1',
         name: 'Tenant One',
         createdAt: new Date().toISOString(),
+        users: [
+          {
+            id: 'admin-1',
+            name: 'Alice Admin',
+            role: UserRole.ADMIN,
+            hashedPassword: 'secret-hash',
+          },
+        ],
       });
 
       const response = await request(app.getHttpServer())
@@ -240,6 +248,9 @@ describe('TenantsController (e2e)', () => {
         id: 'tenant-1',
         name: 'Tenant One',
       });
+      const body = response.body as { admins: Array<Record<string, unknown>> };
+      expect(body.admins).toHaveLength(1);
+      expect(body.admins[0]).not.toHaveProperty('hashedPassword');
     });
 
     it('returns 404 when the tenant does not exist', async () => {
@@ -269,6 +280,7 @@ describe('TenantsController (e2e)', () => {
         id: 'tenant-1',
         name: 'Tenant One',
         createdAt: new Date().toISOString(),
+        users: [],
       });
       mockPrismaService.$transaction.mockResolvedValue([
         { count: 3 },

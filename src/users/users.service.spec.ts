@@ -23,6 +23,7 @@ const mockPrismaService = {
     delete: jest.fn(),
     count: jest.fn(),
   },
+  $transaction: jest.fn(),
 };
 
 function prismaKnownError(code: string) {
@@ -103,24 +104,50 @@ describe('UsersService', () => {
   });
 
   describe('findAllForTenant', () => {
-    it('returns users scoped to the given tenant', async () => {
+    it('returns a page of users scoped to the given tenant, plus the total count', async () => {
       const users = [{ id: '1', tenantId: 'tenant-1' }];
-      mockPrismaService.user.findMany.mockResolvedValue(users);
+      (mockPrismaService.$transaction as jest.Mock).mockResolvedValue([
+        users,
+        1,
+      ]);
 
-      const result = await service.findAllForTenant('tenant-1');
+      const result = await service.findAllForTenant('tenant-1', 1, 20);
 
-      expect(result).toEqual(users);
+      expect(result).toEqual({ users, total: 1, page: 1, pageSize: 20 });
       expect(mockPrismaService.user.findMany).toHaveBeenCalledWith({
+        where: { tenantId: 'tenant-1' },
+        orderBy: { createdAt: 'asc' },
+        skip: 0,
+        take: 20,
+      });
+      expect(mockPrismaService.user.count).toHaveBeenCalledWith({
         where: { tenantId: 'tenant-1' },
       });
     });
 
-    it('returns an empty array when the tenant has no users', async () => {
-      mockPrismaService.user.findMany.mockResolvedValue([]);
+    it('computes skip from the requested page', async () => {
+      (mockPrismaService.$transaction as jest.Mock).mockResolvedValue([
+        [],
+        45,
+      ]);
 
-      const result = await service.findAllForTenant('empty-tenant');
+      await service.findAllForTenant('tenant-1', 3, 20);
 
-      expect(result).toEqual([]);
+      expect(mockPrismaService.user.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 40, take: 20 }),
+      );
+    });
+
+    it('returns an empty page when the tenant has no users', async () => {
+      (mockPrismaService.$transaction as jest.Mock).mockResolvedValue([
+        [],
+        0,
+      ]);
+
+      const result = await service.findAllForTenant('empty-tenant', 1, 20);
+
+      expect(result.users).toEqual([]);
+      expect(result.total).toBe(0);
     });
   });
 
@@ -537,6 +564,67 @@ describe('UsersService', () => {
       await expect(
         service.resetPasswordForTenant('1', 'tenant-1', 'New-password1!'),
       ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('resetSoleAdminPassword', () => {
+    const soleAdmin = {
+      id: 'admin-1',
+      role: UserRole.ADMIN,
+      tenantId: 'tenant-1',
+    };
+
+    it("resets the password when the target is the tenant's only Admin", async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(soleAdmin);
+      mockPrismaService.user.count.mockResolvedValue(1);
+      (argon2.hash as jest.Mock).mockResolvedValue('new-hashed-password');
+
+      await service.resetSoleAdminPassword('admin-1', 'New-password1!');
+
+      expect(mockPrismaService.user.count).toHaveBeenCalledWith({
+        where: { tenantId: 'tenant-1', role: UserRole.ADMIN },
+      });
+      expect(mockPrismaService.user.update).toHaveBeenCalledWith({
+        where: { id: 'admin-1' },
+        data: {
+          hashedPassword: 'new-hashed-password',
+          mustChangePassword: true,
+          passwordResetRequestedAt: null,
+        },
+      });
+    });
+
+    it('rejects when the tenant has a co-Admin who could handle it instead', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(soleAdmin);
+      mockPrismaService.user.count.mockResolvedValue(2);
+
+      await expect(
+        service.resetSoleAdminPassword('admin-1', 'New-password1!'),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the target does not exist', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.resetSoleAdminPassword('missing-id', 'New-password1!'),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the target is not an Admin', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        id: 'viewer-1',
+        role: UserRole.VIEWER,
+        tenantId: 'tenant-1',
+      });
+
+      await expect(
+        service.resetSoleAdminPassword('viewer-1', 'New-password1!'),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.user.count).not.toHaveBeenCalled();
       expect(mockPrismaService.user.update).not.toHaveBeenCalled();
     });
   });
