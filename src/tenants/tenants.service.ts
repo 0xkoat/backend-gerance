@@ -30,6 +30,7 @@ export class TenantsService {
             hashedPassword,
             role: UserRole.ADMIN,
             tenantId: tenant.id,
+            mustChangePassword: true,
           },
         });
 

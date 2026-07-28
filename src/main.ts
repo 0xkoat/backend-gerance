@@ -12,7 +12,7 @@ async function bootstrap() {
   app.use(
     helmet({
       hsts: {
-        maxAge: 63072000, // 2 years, in seconds — hstspreload.org requires >= 1 year
+        maxAge: 63072000, //2 years in seconds
         includeSubDomains: true,
         preload: true,
       },

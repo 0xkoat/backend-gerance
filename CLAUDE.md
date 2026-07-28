@@ -73,8 +73,34 @@ Hard rules that follow from this:
 - An Admin cannot reset their own password via `POST /users/:id/reset-password` — that route
   sets an Admin-chosen password with no proof of the old one, so allowing it on yourself would
   let a stolen/leaked bearer token turn into permanent account takeover (attacker resets the
-  password without ever knowing it). Self password changes must go through
-  `PATCH /users/me/password`, which requires the current password.
+  password without ever knowing it).
+- Every new user, at every level — a tenant's first Admin (`TenantsService.
+  createTenantWithAdmin`) and any subordinate (`UsersService.createUser`) — is created with
+  `mustChangePassword: true`, explicitly set in the create call. This used to rely on the
+  Prisma column default (`@default(false)`), which was a real bug: it meant no new account
+  was ever actually forced through the change flow (found 2026-07-28 by creating a live
+  tenant/Admin through the running API and observing `mustChangePassword: false` on login —
+  see `docs/superpowers/specs/2026-07-28-password-change-request-flow-design.md`). Don't
+  reintroduce reliance on the column default.
+- `PATCH /users/me/password` (current-password-gated self-change) only works while
+  `mustChangePassword` is still `true` — it exists solely to complete the mandatory
+  first-time change, checked against the fresh DB value in `UsersService.changePassword`
+  (not the JWT claim, which can be stale relative to an admin-triggered reset). Once that's
+  done, there is no voluntary "change my password whenever I want" path for any role,
+  including Admins — a stolen bearer token alone can no longer be turned into a silent
+  password change. Voluntary rotation instead goes through:
+  - `POST /users/me/request-password-change` — any authenticated, non-forced user (blocked
+    by `MustChangePasswordGuard` while still forced, same as any other route). Sets
+    `passwordResetRequestedAt` on the caller's own row; doesn't touch the password itself.
+  - `GET /users/me/pending-password-requests` (`@Roles(ADMIN, SUPER_ADMIN)`) →
+    `{ hasPending: boolean }`. **Single designated recipient per tenant**: the tenant's
+    first-created Admin (earliest `createdAt` among `role=ADMIN` in that tenant, computed
+    live, not stored — stays correct if that Admin is later deleted) is the only one who
+    sees `true` for another tenant member's request; a co-Admin always gets `false` here
+    (they can still see the raw per-row status by browsing `(dashboard)/users`, just no
+    ambient ping). The first Admin's own request never pings themselves — it escalates to
+    **every** Super Admin instead (`hasPendingPasswordRequestsForSuperAdmin`), since a sole/
+    first Admin has no one else in-tenant to notify.
 - Demoting a tenant's last remaining Admin to a non-Admin role is rejected
   (`ConflictException`) — every tenant must always have at least one Admin.
 - `POST /users/:id/reset-password` also accepts a `SUPER_ADMIN` caller now (2026-07-23),

@@ -25,6 +25,9 @@ const mockUsersService = {
   changePassword: jest.fn(),
   resetPasswordForTenant: jest.fn(),
   resetSoleAdminPassword: jest.fn(),
+  requestOwnPasswordChange: jest.fn(),
+  hasPendingPasswordRequestsForAdmin: jest.fn(),
+  hasPendingPasswordRequestsForSuperAdmin: jest.fn(),
 };
 
 const mockJwtService = {
@@ -526,6 +529,62 @@ describe('UsersController', () => {
         access_token: 'fresh-jwt',
         mustChangePassword: false,
       });
+    });
+  });
+
+  describe('requestMyPasswordChange', () => {
+    it('flags the caller for a password change and returns a confirmation message', async () => {
+      mockUsersService.requestOwnPasswordChange.mockResolvedValue(undefined);
+
+      const result = await controller.requestMyPasswordChange(admin);
+
+      expect(mockUsersService.requestOwnPasswordChange).toHaveBeenCalledWith(
+        admin.userId,
+      );
+      expect(result).toEqual({
+        message:
+          'Your administrator has been notified of your password change request.',
+      });
+    });
+  });
+
+  describe('getMyPendingPasswordRequests', () => {
+    it("delegates to the Admin-path check, scoped to the caller's own tenant", async () => {
+      mockUsersService.hasPendingPasswordRequestsForAdmin.mockResolvedValue(
+        true,
+      );
+
+      const result = await controller.getMyPendingPasswordRequests(admin);
+
+      expect(
+        mockUsersService.hasPendingPasswordRequestsForAdmin,
+      ).toHaveBeenCalledWith(admin.userId, admin.tenantId);
+      expect(
+        mockUsersService.hasPendingPasswordRequestsForSuperAdmin,
+      ).not.toHaveBeenCalled();
+      expect(result).toEqual({ hasPending: true });
+    });
+
+    it('rejects an Admin with no tenantId', async () => {
+      await expect(
+        controller.getMyPendingPasswordRequests(noTenantAdmin),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('delegates to the Super Admin-path check instead, platform-wide', async () => {
+      mockUsersService.hasPendingPasswordRequestsForSuperAdmin.mockResolvedValue(
+        false,
+      );
+
+      const result = await controller.getMyPendingPasswordRequests(superAdmin);
+
+      expect(
+        mockUsersService.hasPendingPasswordRequestsForSuperAdmin,
+      ).toHaveBeenCalled();
+      expect(
+        mockUsersService.hasPendingPasswordRequestsForAdmin,
+      ).not.toHaveBeenCalled();
+      expect(result).toEqual({ hasPending: false });
     });
   });
 });

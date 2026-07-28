@@ -68,6 +68,7 @@ export class UsersService {
           hashedPassword,
           role,
           tenantId,
+          mustChangePassword: true,
         },
       });
     } catch (error) {
@@ -146,6 +147,15 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
+    // Self-service change only exists to get past the mandatory first-login change — once
+    // that's done, voluntary rotation goes through requestOwnPasswordChange instead (a
+    // stolen bearer token alone can no longer be turned into a silent password change).
+    if (!user.mustChangePassword) {
+      throw new ForbiddenException(
+        'Self password change is only available for your mandatory first-time change. Use the request-password-change flow instead.',
+      );
+    }
+
     const isCurrentPasswordValid = await argon2.verify(
       user.hashedPassword,
       currentPassword,
@@ -160,6 +170,69 @@ export class UsersService {
       where: { id: userId },
       data: { hashedPassword, mustChangePassword: false },
     });
+  }
+
+  async requestOwnPasswordChange(userId: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { passwordResetRequestedAt: new Date() },
+    });
+  }
+
+  // Single designated recipient per tenant: the earliest-created Admin (by createdAt),
+  // computed live rather than stored, so it stays correct if that Admin is later deleted.
+  // That Admin's own request is deliberately excluded here — it escalates to Super Admins
+  // instead (see hasPendingPasswordRequestsForSuperAdmin) rather than pinging themselves.
+  async hasPendingPasswordRequestsForAdmin(
+    adminId: string,
+    tenantId: string,
+  ): Promise<boolean> {
+    const firstAdmin = await this.prisma.user.findFirst({
+      where: { tenantId, role: UserRole.ADMIN },
+      orderBy: { createdAt: 'asc' },
+      select: { id: true },
+    });
+
+    if (!firstAdmin || firstAdmin.id !== adminId) {
+      return false;
+    }
+
+    const pendingCount = await this.prisma.user.count({
+      where: {
+        tenantId,
+        id: { not: adminId },
+        passwordResetRequestedAt: { not: null },
+      },
+    });
+
+    return pendingCount > 0;
+  }
+
+  // Escalation counterpart to hasPendingPasswordRequestsForAdmin: a tenant's first-created
+  // Admin has no one else in-tenant to notify, so their own pending request surfaces to
+  // every Super Admin instead. Bounded by the (small) number of currently-pending Admins,
+  // not the total Admin count, so the N+1 lookup here is cheap in practice.
+  async hasPendingPasswordRequestsForSuperAdmin(): Promise<boolean> {
+    const pendingAdmins = await this.prisma.user.findMany({
+      where: { role: UserRole.ADMIN, passwordResetRequestedAt: { not: null } },
+      select: { id: true, tenantId: true },
+    });
+
+    for (const admin of pendingAdmins) {
+      if (!admin.tenantId) continue;
+
+      const firstAdmin = await this.prisma.user.findFirst({
+        where: { tenantId: admin.tenantId, role: UserRole.ADMIN },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+      });
+
+      if (firstAdmin?.id === admin.id) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   async requestPasswordReset(email: string): Promise<void> {
