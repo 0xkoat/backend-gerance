@@ -77,6 +77,41 @@ export class UsersController {
     };
   }
 
+  @Post('me/request-password-change')
+  async requestMyPasswordChange(
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<{ message: string }> {
+    await this.usersService.requestOwnPasswordChange(user.userId);
+
+    return {
+      message:
+        'Your administrator has been notified of your password change request.',
+    };
+  }
+
+  @Roles(UserRole.ADMIN, UserRole.SUPER_ADMIN)
+  @Get('me/pending-password-requests')
+  async getMyPendingPasswordRequests(
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<{ hasPending: boolean }> {
+    if (user.role === UserRole.SUPER_ADMIN) {
+      const hasPending =
+        await this.usersService.hasPendingPasswordRequestsForSuperAdmin();
+      return { hasPending };
+    }
+
+    if (!user.tenantId) {
+      throw new ForbiddenException('This account is not scoped to a tenant');
+    }
+
+    const hasPending =
+      await this.usersService.hasPendingPasswordRequestsForAdmin(
+        user.userId,
+        user.tenantId,
+      );
+    return { hasPending };
+  }
+
   @Roles(UserRole.ADMIN)
   @Post()
   async createUser(

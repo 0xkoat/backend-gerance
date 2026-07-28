@@ -17,6 +17,7 @@ jest.mock('argon2');
 const mockPrismaService = {
   user: {
     findUnique: jest.fn(),
+    findFirst: jest.fn(),
     findMany: jest.fn(),
     create: jest.fn(),
     update: jest.fn(),
@@ -186,6 +187,7 @@ describe('UsersService', () => {
           hashedPassword: 'hashed-password',
           role: UserRole.ANALYST,
           tenantId: 'tenant-1',
+          mustChangePassword: true,
         },
       });
       expect(result).toEqual(createdUser);
@@ -443,7 +445,11 @@ describe('UsersService', () => {
   });
 
   describe('changePassword', () => {
-    const existingUser = { id: '1', hashedPassword: 'old-hashed-password' };
+    const existingUser = {
+      id: '1',
+      hashedPassword: 'old-hashed-password',
+      mustChangePassword: true,
+    };
 
     it('verifies the current password, hashes the new one, and updates it', async () => {
       mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
@@ -484,6 +490,119 @@ describe('UsersService', () => {
       ).rejects.toThrow(NotFoundException);
       expect(argon2.verify).not.toHaveBeenCalled();
       expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects with ForbiddenException once mustChangePassword is already false, without checking the password', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        id: '1',
+        hashedPassword: 'old-hashed-password',
+        mustChangePassword: false,
+      });
+
+      await expect(
+        service.changePassword('1', 'old-password', 'New-password1!'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(argon2.verify).not.toHaveBeenCalled();
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('requestOwnPasswordChange', () => {
+    it('sets passwordResetRequestedAt on the caller', async () => {
+      await service.requestOwnPasswordChange('1');
+
+      expect(mockPrismaService.user.update).toHaveBeenCalledWith({
+        where: { id: '1' },
+        data: { passwordResetRequestedAt: expect.any(Date) },
+      });
+    });
+  });
+
+  describe('hasPendingPasswordRequestsForAdmin', () => {
+    it('returns false when the caller is not the tenant\'s first-created Admin', async () => {
+      mockPrismaService.user.findFirst.mockResolvedValue({ id: 'first-admin' });
+
+      const result = await service.hasPendingPasswordRequestsForAdmin(
+        'other-admin',
+        'tenant-1',
+      );
+
+      expect(result).toBe(false);
+      expect(mockPrismaService.user.count).not.toHaveBeenCalled();
+    });
+
+    it('returns false when there is no tenant Admin at all', async () => {
+      mockPrismaService.user.findFirst.mockResolvedValue(null);
+
+      const result = await service.hasPendingPasswordRequestsForAdmin(
+        'admin-1',
+        'tenant-1',
+      );
+
+      expect(result).toBe(false);
+    });
+
+    it('returns true when the first Admin has a pending request from someone else in the tenant', async () => {
+      mockPrismaService.user.findFirst.mockResolvedValue({ id: 'admin-1' });
+      mockPrismaService.user.count.mockResolvedValue(1);
+
+      const result = await service.hasPendingPasswordRequestsForAdmin(
+        'admin-1',
+        'tenant-1',
+      );
+
+      expect(result).toBe(true);
+      expect(mockPrismaService.user.count).toHaveBeenCalledWith({
+        where: {
+          tenantId: 'tenant-1',
+          id: { not: 'admin-1' },
+          passwordResetRequestedAt: { not: null },
+        },
+      });
+    });
+
+    it('returns false when the first Admin has no pending requests from others', async () => {
+      mockPrismaService.user.findFirst.mockResolvedValue({ id: 'admin-1' });
+      mockPrismaService.user.count.mockResolvedValue(0);
+
+      const result = await service.hasPendingPasswordRequestsForAdmin(
+        'admin-1',
+        'tenant-1',
+      );
+
+      expect(result).toBe(false);
+    });
+  });
+
+  describe('hasPendingPasswordRequestsForSuperAdmin', () => {
+    it('returns false when no Admin has a pending request', async () => {
+      mockPrismaService.user.findMany.mockResolvedValue([]);
+
+      const result = await service.hasPendingPasswordRequestsForSuperAdmin();
+
+      expect(result).toBe(false);
+    });
+
+    it("returns true when a pending Admin is their tenant's first-created Admin", async () => {
+      mockPrismaService.user.findMany.mockResolvedValue([
+        { id: 'admin-1', tenantId: 'tenant-1' },
+      ]);
+      mockPrismaService.user.findFirst.mockResolvedValue({ id: 'admin-1' });
+
+      const result = await service.hasPendingPasswordRequestsForSuperAdmin();
+
+      expect(result).toBe(true);
+    });
+
+    it('returns false when the pending Admin is a co-Admin, not the first-created one (handled by the tenant Admin path instead)', async () => {
+      mockPrismaService.user.findMany.mockResolvedValue([
+        { id: 'co-admin-2', tenantId: 'tenant-1' },
+      ]);
+      mockPrismaService.user.findFirst.mockResolvedValue({ id: 'admin-1' });
+
+      const result = await service.hasPendingPasswordRequestsForSuperAdmin();
+
+      expect(result).toBe(false);
     });
   });
 

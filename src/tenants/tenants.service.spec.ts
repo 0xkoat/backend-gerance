@@ -112,6 +112,7 @@ describe('TenantsService', () => {
           hashedPassword: 'hashed-password',
           role: UserRole.ADMIN,
           tenantId: 'tenant-1',
+          mustChangePassword: true,
         },
       });
       expect(result.tenant).toEqual(createdTenant);
