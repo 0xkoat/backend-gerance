@@ -10,6 +10,7 @@ import { VmModule } from './vm/vm.module';
 import { EdrModule } from './edr/edr.module';
 import { SiemModule } from './siem/siem.module';
 import { CtiModule } from './cti/cti.module';
+import { SoarModule } from './soar/soar.module';
 import { APP_GUARD } from '@nestjs/core';
 import { RolesGuard } from './auth/guards/roles.guard';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
@@ -27,6 +28,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     EdrModule,
     SiemModule,
     CtiModule,
+    SoarModule,
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 10 }]),
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),

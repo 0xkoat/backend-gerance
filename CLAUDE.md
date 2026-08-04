@@ -1,4 +1,4 @@
-# Backend — SecOPs API
+st# Backend — SecOPs API
 
 Part of the SecOPs multi-tenant SOC SaaS platform (SIEM, SOAR, CTI, EDR, DFIR, VM modules).
 See root `CLAUDE.md` for overall project context.
@@ -413,7 +413,7 @@ polling-ingestion skeleton come after all six modules exist, since they all read
 
 ## Phase 5 — SOAR module (triggers off SIEM/CTI)
 
-- [ ] Prisma: `SoarPlaybook { id, tenantId, name, triggerCondition Json, actions Json,
+- [x] Prisma: `SoarPlaybook { id, tenantId, name, triggerCondition Json, actions Json,
       createdAt }`, `SoarExecution { id, tenantId, playbookId, alertId, status enum (PENDING |
       RUNNING | SUCCESS | FAILED), logs String?, createdAt }`.
 - [ ] `SoarService implements SecurityModule<SoarExecution, SoarQueryFilters>`: `ingest()`,
@@ -421,12 +421,12 @@ polling-ingestion skeleton come after all six modules exist, since they all read
       playbooks, does a simple exact-match check of `triggerCondition` against the event —
       e.g. `{ severity: 'CRITICAL' }` — creates a `SoarExecution` row, simulated per decision 8,
       then emits `soar.execution.created`). + `soar.service.spec.ts`.
-- [ ] `@OnEvent('siem.alert.created')` and `@OnEvent('cti.enrichment.applied')` on `SoarService`
+- [x] `@OnEvent('siem.alert.created')` and `@OnEvent('cti.enrichment.applied')` on `SoarService`
       → both call `evaluateTriggers`. + unit tests.
-- [ ] `SoarController`: `GET /soar/playbooks`, `POST /soar/playbooks` (Admin only — playbooks are
+- [x] `SoarController`: `GET /soar/playbooks`, `POST /soar/playbooks` (Admin only — playbooks are
       configuration, not day-to-day analyst work), `GET /soar/executions`. +
       `soar.controller.spec.ts`.
-- [ ] `test/soar.e2e-spec.ts`.
+- [x] `test/soar.e2e-spec.ts`.
 
 ## Phase 6 — DFIR module (aggregates everything)
 

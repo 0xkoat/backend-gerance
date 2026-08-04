@@ -34,3 +34,10 @@ export interface CtiEnrichmentPayload {
   alertId: string;
   severity: Severity;
 }
+
+export interface SoarExecutionPayload {
+  tenantId: string;
+  executionId: string;
+  alertId: string;
+  playbookId: string;
+}
