@@ -26,6 +26,8 @@ model Tenant {
   siemLogs          SiemLog[]
   siemAlerts        SiemAlert[]
   ctiIocs           CtiIoc[]
+  soarPlaybooks     SoarPlaybook[]
+  soarExecutions    SoarExecution[]
 }
 
 enum UserRole {
@@ -206,6 +208,42 @@ model SiemAlert {
   assignedToUser   User?           @relation(fields: [assignedToUserId], references: [id])
   rawData          Json?
   createdAt        DateTime        @default(now())
+  soarExecutions   SoarExecution[]
+
+  @@index([tenantId])
+}
+
+model SoarPlaybook {
+  id               String          @id @default(uuid()) @db.Uuid
+  tenantId         String          @db.Uuid
+  tenant           Tenant          @relation(fields: [tenantId], references: [id])
+  name             String
+  triggerCondition Json
+  actions          Json
+  createdAt        DateTime        @default(now())
+  executions       SoarExecution[]
+
+  @@index([tenantId])
+}
+
+enum SoarExecutionStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+model SoarExecution {
+  id         String              @id @default(uuid()) @db.Uuid
+  tenantId   String              @db.Uuid
+  tenant     Tenant              @relation(fields: [tenantId], references: [id])
+  playbookId String              @db.Uuid
+  playbook   SoarPlaybook        @relation(fields: [playbookId], references: [id])
+  alertId    String              @db.Uuid
+  alert      SiemAlert           @relation(fields: [alertId], references: [id])
+  status     SoarExecutionStatus @default(PENDING)
+  logs       String?
+  createdAt  DateTime            @default(now())
 
   @@index([tenantId])
 }

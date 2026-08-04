@@ -1,0 +1,52 @@
+import {
+  Controller,
+  Get,
+  ForbiddenException,
+  Post,
+  Body,
+  Query,
+} from '@nestjs/common';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import type { AuthenticatedUser } from '../auth/jwt.strategy';
+import { UserRole } from '../generated/prisma/enums';
+import { SoarService } from './soar.service';
+import { CreateSoarPlaybookDto } from './dto/createSoarPlaybook.dto';
+import { SoarQueryDto } from './dto/soarQuery.dto';
+
+@Controller('soar')
+export class SoarController {
+  constructor(private readonly soarService: SoarService) {}
+
+  private requireTenantId(user: AuthenticatedUser): string {
+    if (!user.tenantId) {
+      throw new ForbiddenException('This account is not scoped to a tenant');
+    }
+    return user.tenantId;
+  }
+
+  @Get('playbooks')
+  async listPlaybooks(@CurrentUser() user: AuthenticatedUser) {
+    const tenantId = this.requireTenantId(user);
+    return this.soarService.listPlaybooks(tenantId);
+  }
+
+  @Post('playbooks')
+  @Roles(UserRole.ADMIN)
+  async createPlaybook(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() createSoarPlaybookDto: CreateSoarPlaybookDto,
+  ) {
+    const tenantId = this.requireTenantId(user);
+    return this.soarService.createPlaybook(tenantId, createSoarPlaybookDto);
+  }
+
+  @Get('executions')
+  async queryExecutions(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query() query: SoarQueryDto,
+  ) {
+    const tenantId = this.requireTenantId(user);
+    return this.soarService.query({ ...query, tenantId });
+  }
+}
