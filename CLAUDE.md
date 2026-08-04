@@ -342,11 +342,11 @@ polling-ingestion skeleton come after all six modules exist, since they all read
 
 ## Phase 1 — VM module (warm-up, no orchestration dependency)
 
-- [ ] Prisma: `VmAsset { id, tenantId, name, ip, type, createdAt }`, `VmVulnerability { id,
+- [x] Prisma: `VmAsset { id, tenantId, name, ip, type, createdAt }`, `VmVulnerability { id,
       tenantId, assetId, severity Severity, description, cveId String?, status enum (OPEN |
       REMEDIATED | ACCEPTED_RISK, default OPEN), rawData Json?, createdAt }`. Index `tenantId`
       on both, per this project's existing convention.
-- [ ] `VmService implements SecurityModule<VmVulnerability, VmQueryFilters>`:
+- [x] `VmService implements SecurityModule<VmVulnerability, VmQueryFilters>`:
       `ingest(event)` (upsert `VmAsset` by `(tenantId, ip)` if `data` references one, then create
       `VmVulnerability`), `query(filters)`, `healthCheck()`, `listAssets(tenantId)`,
       `createAsset(tenantId, dto)`, `updateVulnerabilityStatus(tenantId, id, status)`.
@@ -505,3 +505,19 @@ polling-ingestion skeleton come after all six modules exist, since they all read
 - [ ] Add a "Modules — Development Log" section to `docs/internship-report-backend.md`,
       mirroring §4's chronological format, and update this file's summary sections once the six
       modules are no longer "explicitly deferred."
+
+## Phase 12 — Deferred: introduce `Logger` project-wide
+
+Flagged 2026-08-04 while reviewing `VmService.healthCheck()`'s `catch` block: this codebase
+doesn't use NestJS's `Logger` anywhere yet (confirmed via repo-wide grep) — every `catch` today
+either rethrows or silently swallows. That's fine for now (the plain `catch {}` fix in
+`VmService.healthCheck()` matches existing convention), but a real logging convention would
+make failures like a health check going `'down'` actually debuggable instead of just visible as
+a status flag with no context. **Deliberately deferred, not forgotten** — don't introduce
+`Logger` piecemeal in one module's catch block; it should be a single, consistent decision
+applied across the whole codebase (auth, users, tenants, and all six security modules) once the
+module build-out (Phases 0–11) is done, not bolted on ad hoc along the way.
+
+- [ ] Decide and apply a project-wide `Logger` convention (where it's injected, what gets
+      logged at what level, whether it replaces or supplements existing silent/rethrow error
+      handling) across the whole backend, once Phases 0–11 are complete.

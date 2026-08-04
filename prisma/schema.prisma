@@ -14,11 +14,13 @@ datasource db {
 }
 
 model Tenant {
-  id         String         @id @default(uuid()) @db.Uuid
-  name       String
-  createdAt  DateTime       @default(now())
-  users      User[]
-  modules    TenantModule[]
+  id                  String         @id @default(uuid()) @db.Uuid
+  name                String
+  createdAt           DateTime       @default(now())
+  users               User[]
+  modules             TenantModule[]
+  vmAssets            VmAsset[]
+  vmVulnerabilities   VmVulnerability[]
 }
 
 enum UserRole {
@@ -60,6 +62,12 @@ enum Severity {
   CRITICAL  
 }
 
+enum VmVulnerabilitiesStatus {
+  OPEN
+  REMEDIATED
+  ACCEPTED_RISK
+}
+
 model TenantModule {
   id         String           @id @default(uuid()) @db.Uuid
   tenantId   String           @db.Uuid
@@ -69,5 +77,35 @@ model TenantModule {
   moduleName ModuleName
 
   @@unique([tenantId, moduleName])
+  @@index([tenantId])
+}
+
+model VmAsset {
+  id                String           @id @default(uuid()) @db.Uuid
+  tenantId          String           @db.Uuid
+  tenant            Tenant           @relation(fields: [tenantId], references: [id])
+  name              String
+  ip                String
+  type              String
+  createdAt         DateTime         @default(now())
+  vmVulnerabilities VmVulnerability[]
+  
+  @@index([tenantId])
+  @@unique([tenantId, ip])
+}
+
+model VmVulnerability {
+  id         String                           @id @default(uuid()) @db.Uuid
+  tenantId   String                           @db.Uuid
+  tenant     Tenant                           @relation(fields: [tenantId], references: [id])
+  assetId    String                           @db.Uuid
+  asset      VmAsset                          @relation(fields: [assetId], references: [id])
+  severity   Severity
+  description String
+  createdAt  DateTime                         @default(now())
+  cveId     String?
+  status     VmVulnerabilitiesStatus          @default(OPEN)
+  rawData    Json?
+
   @@index([tenantId])
 }
