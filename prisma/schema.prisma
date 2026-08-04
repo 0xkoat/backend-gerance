@@ -14,13 +14,15 @@ datasource db {
 }
 
 model Tenant {
-  id                  String         @id @default(uuid()) @db.Uuid
-  name                String
-  createdAt           DateTime       @default(now())
-  users               User[]
-  modules             TenantModule[]
-  vmAssets            VmAsset[]
-  vmVulnerabilities   VmVulnerability[]
+  id                String            @id @default(uuid()) @db.Uuid
+  name              String
+  createdAt         DateTime          @default(now())
+  users             User[]
+  modules           TenantModule[]
+  vmAssets          VmAsset[]
+  vmVulnerabilities VmVulnerability[]
+  edrEndpoints      EdrEndpoint[]
+  edrDetections     EdrDetection[]
 }
 
 enum UserRole {
@@ -37,12 +39,13 @@ model User {
   name                     String
   role                     UserRole  @default(VIEWER)
   hashedPassword           String
-  tenantId                 String?  @db.Uuid
-  tenant                   Tenant?  @relation(fields: [tenantId], references: [id])
+  tenantId                 String?   @db.Uuid
+  tenant                   Tenant?   @relation(fields: [tenantId], references: [id])
   passwordResetRequestedAt DateTime?
   mustChangePassword       Boolean   @default(false)
   createdAt                DateTime  @default(now())
   updatedAt                DateTime  @updatedAt
+
   @@index([tenantId])
 }
 
@@ -59,7 +62,7 @@ enum Severity {
   LOW
   MEDIUM
   HIGH
-  CRITICAL  
+  CRITICAL
 }
 
 enum VmVulnerabilitiesStatus {
@@ -69,11 +72,11 @@ enum VmVulnerabilitiesStatus {
 }
 
 model TenantModule {
-  id         String           @id @default(uuid()) @db.Uuid
-  tenantId   String           @db.Uuid
-  tenant     Tenant           @relation(fields: [tenantId], references: [id])
+  id         String     @id @default(uuid()) @db.Uuid
+  tenantId   String     @db.Uuid
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
   config     Json?
-  isActive   Boolean          @default(true)
+  isActive   Boolean    @default(true)
   moduleName ModuleName
 
   @@unique([tenantId, moduleName])
@@ -81,31 +84,66 @@ model TenantModule {
 }
 
 model VmAsset {
-  id                String           @id @default(uuid()) @db.Uuid
-  tenantId          String           @db.Uuid
-  tenant            Tenant           @relation(fields: [tenantId], references: [id])
+  id                String            @id @default(uuid()) @db.Uuid
+  tenantId          String            @db.Uuid
+  tenant            Tenant            @relation(fields: [tenantId], references: [id])
   name              String
   ip                String
   type              String
-  createdAt         DateTime         @default(now())
+  createdAt         DateTime          @default(now())
   vmVulnerabilities VmVulnerability[]
-  
-  @@index([tenantId])
+
   @@unique([tenantId, ip])
+  @@index([tenantId])
 }
 
 model VmVulnerability {
-  id         String                           @id @default(uuid()) @db.Uuid
-  tenantId   String                           @db.Uuid
-  tenant     Tenant                           @relation(fields: [tenantId], references: [id])
-  assetId    String                           @db.Uuid
-  asset      VmAsset                          @relation(fields: [assetId], references: [id])
-  severity   Severity
+  id          String                  @id @default(uuid()) @db.Uuid
+  tenantId    String                  @db.Uuid
+  tenant      Tenant                  @relation(fields: [tenantId], references: [id])
+  assetId     String                  @db.Uuid
+  asset       VmAsset                 @relation(fields: [assetId], references: [id])
+  severity    Severity
   description String
-  createdAt  DateTime                         @default(now())
-  cveId     String?
-  status     VmVulnerabilitiesStatus          @default(OPEN)
-  rawData    Json?
+  createdAt   DateTime                @default(now())
+  cveId       String?
+  status      VmVulnerabilitiesStatus @default(OPEN)
+  rawData     Json?
+
+  @@index([tenantId])
+}
+
+enum EdrEndpointStatus {
+  ONLINE
+  OFFLINE
+  UNKNOWN
+}
+
+model EdrEndpoint {
+  id         String            @id @default(uuid()) @db.Uuid
+  tenantId   String            @db.Uuid
+  tenant     Tenant            @relation(fields: [tenantId], references: [id])
+  hostname   String
+  ip         String
+  os         String
+  status     EdrEndpointStatus @default(UNKNOWN)
+  lastSeen   DateTime          @default(now())
+  detections EdrDetection[]
+
+  @@unique([tenantId, hostname])
+  @@index([tenantId])
+}
+
+model EdrDetection {
+  id            String      @id @default(uuid()) @db.Uuid
+  tenantId      String      @db.Uuid
+  tenant        Tenant      @relation(fields: [tenantId], references: [id])
+  endpointId    String      @db.Uuid
+  endpoint      EdrEndpoint @relation(fields: [endpointId], references: [id])
+  detectionName String
+  severity      Severity
+  rawData       Json?
+  createdAt     DateTime    @default(now())
 
   @@index([tenantId])
 }

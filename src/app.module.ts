@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { HealthModule } from './health/health.module';
 import { VmModule } from './vm/vm.module';
+import { EdrModule } from './edr/edr.module';
 import { APP_GUARD } from '@nestjs/core';
 import { RolesGuard } from './auth/guards/roles.guard';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
@@ -21,6 +22,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     TenantsModule,
     HealthModule,
     VmModule,
+    EdrModule,
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 10 }]),
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),

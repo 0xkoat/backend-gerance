@@ -360,17 +360,17 @@ polling-ingestion skeleton come after all six modules exist, since they all read
 
 ## Phase 2 — EDR module
 
-- [ ] Prisma: `EdrEndpoint { id, tenantId, hostname, ip, os, status, lastSeen }`,
+- [x] Prisma: `EdrEndpoint { id, tenantId, hostname, ip, os, status, lastSeen }`,
       `EdrDetection { id, tenantId, endpointId, detectionName, severity Severity, rawData Json?,
       createdAt }`.
-- [ ] `EdrService implements SecurityModule<EdrDetection, EdrQueryFilters>`: `ingest(event)`
+- [x] `EdrService implements SecurityModule<EdrDetection, EdrQueryFilters>`: `ingest(event)`
       (upsert `EdrEndpoint` by `(tenantId, hostname)`, create `EdrDetection`, then
       `eventEmitter.emit('edr.detection.created', event)`), `query()`, `healthCheck()`,
       `listEndpoints(tenantId)`. + `edr.service.spec.ts` (assert the emit call happens, via a
       mocked `EventEmitter2`).
-- [ ] `EdrController`: `POST /edr/events` (ingestion), `GET /edr/endpoints`, `GET
+- [x] `EdrController`: `POST /edr/events` (ingestion), `GET /edr/endpoints`, `GET
       /edr/detections`. + `edr.controller.spec.ts`.
-- [ ] `test/edr.e2e-spec.ts`.
+- [x] `test/edr.e2e-spec.ts`.
 
 ## Phase 3 — SIEM module (listens to EDR)
 
