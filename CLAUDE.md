@@ -15,6 +15,95 @@ See root `CLAUDE.md` for overall project context.
   EDR, DFIR, VM) implements, for consistency across the platform
 - Redis deferred — don't introduce it unless there's a clear need
 
+# Security modules — architecture spec (not yet built)
+
+Source: root `CLAUDE.md`'s "Security modules architecture" section points here for detail.
+Status as of 2026-08-04: **none of the six modules are implemented yet** — only
+`auth`/`users`/`tenants`/`health` exist under `src/`. `TenantModule` (model) and
+`ModuleName`/`ModuleSourceType` (enums) already exist in `prisma/schema.prisma` — this is
+the platform-level "which modules is this tenant subscribed to" table (matches the spec's
+`tenant_modules`), not any per-module data table. The module-specific tables below (`siem_*`,
+`edr_*`, etc.) don't exist in the schema yet.
+
+**Six modules + one cross-module aggregator**: SIEM (detection & alerts), SOAR (automation),
+CTI (threat intel), EDR (endpoint telemetry), DFIR (incident response), VM (vulnerability
+management). `Asset` is not its own module — it's a virtual aggregation view over records
+from all six (SIEM Logs, SIEM Alerts, EDR Detections, Vulnerabilities, DFIR Incidents, SOAR
+Actions, CTI Observations).
+
+**Unified internal event envelope** — every ingested event/detection/alert, regardless of
+source, is normalized into this shape before processing; `data` is the module-specific
+payload, the envelope itself never changes shape. This is what lets SOAR/DFIR consume events
+from any module without knowing its internals:
+
+```ts
+type Severity = 'low' | 'medium' | 'high' | 'critical'
+type EventSource = 'edr' | 'siem' | 'cti' | 'vm' | 'api'
+type EventType = 'alert' | 'event' | 'detection' | 'ioc' | 'vulnerability'
+
+interface UnifiedEvent {
+  tenant_id: string
+  timestamp: string   // ISO 8601
+  source: EventSource
+  type: EventType
+  severity: Severity
+  data: Record<string, unknown>
+}
+```
+
+**`SecurityModule` contract** — every module's NestJS service implements this; the
+orchestration layer calls `ingest()`/`query()` without knowing the concrete module:
+
+```ts
+interface SecurityModule {
+  ingest(event: UnifiedEvent): Promise<void>       // receive and store a normalized event
+  query(filters: QueryFilters): Promise<any[]>      // return filtered records for this module
+  healthCheck(): Promise<ModuleHealth>              // confirm module is operational
+}
+
+interface ModuleHealth {
+  module: string
+  status: 'ok' | 'degraded' | 'down'
+  last_ingestion?: string
+}
+```
+
+**Orchestration is internal, not inter-service.** Each step below is a service method
+triggered by an internal NestJS event emitter, not an HTTP call — same process, same
+modular-monolith rule as everything else in this repo:
+
+```
+EDR agent pushes telemetry (POST /edr/events)
+  → EDR service normalizes, saves edr_detection, emits event
+  → SIEM ingest receives, saves siem_alert, emits event
+  → CTI service checks IOCs, enriches on match (severity may escalate)
+  → SOAR service checks triggers, fires playbook, saves soar_execution
+  → DFIR service creates incident, links related records
+```
+
+Two named example flows from the spec: `EDR → SIEM (alert) → SOAR (playbook) → DFIR
+(incident)`, and `EDR/SIEM event → CTI enrichment → enhanced alert stored back in SIEM`.
+
+**Planned DB schema, by module** (all tenant-scoped tables carry `tenant_id`; none of these
+exist in `schema.prisma` yet — build them when that module's turn comes up, don't
+pre-create all six at once):
+
+- SIEM: `siem_logs` (source, event_type, severity, raw_data, timestamp), `siem_alerts`
+  (title, severity, status, created_at)
+- EDR: `edr_endpoints` (hostname, ip, os, status, last_seen), `edr_detections`
+  (endpoint_id, detection_name, severity)
+- CTI: `cti_iocs` (type, value, confidence, source)
+- SOAR: `soar_playbooks` (name, trigger_condition, actions), `soar_executions`
+  (playbook_id, alert_id, status, logs)
+- DFIR: `dfir_incidents` (title, severity, status, created_at), `dfir_links`
+  (incident_id, source_type, source_id — polymorphic link to any other module's record)
+- VM: `vm_assets` (name, ip, type), `vm_vulnerabilities` (asset_id, severity, description)
+
+**Open input required before starting implementation** (per the spec's design-summary
+section): each module's real API documentation, or test/sandbox APIs to integrate against —
+and the final third-party dependency list. Don't guess a module's external API shape;
+confirm docs/test API exist for that module before building its ingestion path.
+
 # User provisioning & RBAC hierarchy
 
 No public sign-up exists anywhere in this platform. Every user, at every role, is created by
@@ -148,9 +237,258 @@ Hard rules that follow from this:
 - Frontend types are hand-maintained (not generated) to match the shapes documented in
   root `CLAUDE.md`'s "Backend API contract" section — deliberate choice, safest option for
   a production API surface, at the cost of manual sync when a DTO changes.
+- `npm audit` flags one moderate vulnerability in `@hono/node-server`, pulled in transitively
+  through `@prisma/dev` (Prisma's CLI dev tooling, not a runtime dependency of the deployed
+  app). The available fix requires downgrading `prisma` to `6.19.3` — a breaking change
+  against this project's Prisma-7-specific work (driver adapter, `moduleFormat: cjs`,
+  `prisma.config.ts` seed wiring, etc., see `docs/internship-report-backend.md` §4.1/§4.11).
+  Left deliberately unfixed; don't `npm audit fix --force` this away.
 
 # Conventions
 
 - Don't guess at vulnerabilities or root causes — enumerate and verify first
 - Manual, step-by-step fix instructions preferred over full file replacements when debugging
   existing configs/workflows (preserves credentials and state)
+
+# Module implementation plan — SIEM / SOAR / CTI / EDR / DFIR / VM
+
+**How to use this checklist:** one unchecked item is roughly one chat session's worth of work.
+Pick the next unchecked box, implement it yourself, come back for review — check the box only
+once it's actually reviewed and working, not just attempted, so this list stays trustworthy.
+Update it as reality diverges from the plan (a phase turns out to need splitting, a decision
+below gets overridden, etc.) — don't let it silently drift, same rule as every other list in
+this file. Every module task implicitly includes its own migration
+(`npx prisma migrate dev --name <phase>_<what>`) — not called out per line.
+
+**Build order:** VM first as a warm-up (no cross-module orchestration — nail the
+schema→service→controller→tests rhythm once, cleanly, before adding event-emitter complexity).
+Then EDR → SIEM → CTI → SOAR → DFIR in the spec's own orchestration order, so each module's
+"listen for the previous module's event" step is built right when the module it depends on
+already exists, instead of one big wiring task at the end. Asset aggregation, SSE, and the
+polling-ingestion skeleton come after all six modules exist, since they all read across modules.
+
+## Decisions baked into this plan — confirm or override before starting, don't silently accept
+
+1. **`Severity` becomes a real Prisma enum**, `LOW | MEDIUM | HIGH | CRITICAL` (uppercase),
+   matching this codebase's existing enum casing (`UserRole`, `ModuleName`, `ModuleSourceType`)
+   rather than the architecture PDF's lowercase `'low' | 'medium' | ...` strings. The TS
+   `Severity` type should mirror the Prisma enum 1:1 (no manual mapping layer at the API
+   boundary) — this is a deliberate, documented deviation from the PDF spec's example casing,
+   not an oversight.
+2. **`source` reuses the existing `ModuleName` enum** (`SIEM | SOAR | CTI | EDR | DFIR | VM`)
+   instead of introducing a second, near-identical `EventSource` enum — the PDF's extra `'api'`
+   source value is dropped; a manually-entered record (e.g. an Admin hand-adding a CTI IOC) can
+   just use that module's own name as its source. Revisit only if a real need for a distinct
+   "manual/API" source shows up.
+3. **Every per-record table gets a `rawData Json?` column**, extending the pattern the spec
+   already applies to `siem_logs` (`raw_data`) to every module — this is what makes the
+   `UnifiedEvent.data` escape hatch meaningful: known fields get real relational columns
+   (queryable, indexable), the full original payload is never silently dropped.
+4. **Shared types live in `src/common/security-module/`** (`types.ts` for `Severity`,
+   `UnifiedEvent`, `ModuleHealth`, `BaseQueryFilters`; `security-module.interface.ts` for the
+   `SecurityModule<TRecord, TFilters>` contract) — new folder, since nothing shared currently
+   exists outside `src/auth`/`src/users`/`src/tenants`/`src/prisma`/`src/health`.
+5. **`SecurityModule` is generic**, not the PDF's literal `query(filters): Promise<any[]>`:
+   `interface SecurityModule<TRecord, TFilters extends BaseQueryFilters> { ingest(event:
+   UnifiedEvent): Promise<void>; query(filters: TFilters): Promise<TRecord[]>; healthCheck():
+   Promise<ModuleHealth> }` — closes the one real type-safety gap in the spec's interface.
+6. **Cross-module reactions go through the event emitter only, never a direct service-to-service
+   call** (e.g. CTI never imports `SiemService` directly to escalate a severity — it emits
+   `cti.enrichment.applied` and SIEM listens for it). Keeps the modules as decoupled in code as
+   the architecture doc claims they are conceptually.
+7. **Ingestion routes (`POST /<module>/events`) are temporarily gated behind the existing
+   `@Roles(ADMIN)` JWT auth, as a stand-in.** A real EDR agent or vendor webhook won't have a
+   tenant user's JWT — it needs its own auth (API key, mTLS, etc.). Designing that is a separate,
+   deliberate decision, not something to improvise as a side effect of building these routes;
+   flagged here so it isn't forgotten, not solved in this plan.
+8. **SOAR "execution" is fully simulated for MVP** — `SoarExecution` rows are created and
+   immediately marked `SUCCESS` with a logged message; there is no real automation engine to call
+   (per root `CLAUDE.md`: the backend integrates external engines, it doesn't reimplement them,
+   and no real SOAR engine access exists yet). Don't build fake "real" execution logic.
+9. **RBAC default across all six modules**, unless a task below says otherwise: any
+   authenticated tenant role (Admin/Analyst/Viewer) can `GET`; mutating/status-changing routes
+   require `@Roles(ANALYST, ADMIN)` (matches the spec's "Analyst investigates, can trigger SOAR;
+   Viewer is read-only" role description); Super Admin has no tenant, so no module routes apply
+   to it, same as the existing `[module]` stub's reasoning on the frontend.
+
+## Phase 0 — Foundation (do this before any module)
+
+- [x] Install `@nestjs/event-emitter` and `@nestjs/schedule`; wire `EventEmitterModule.forRoot()`
+      and `ScheduleModule.forRoot()` into `AppModule`.
+- [ ] `src/common/security-module/types.ts` — `Severity` (also add as a Prisma enum in
+      `schema.prisma`), `UnifiedEvent { tenantId, timestamp, source: ModuleName, type, severity,
+      data: Record<string, unknown> }`, `ModuleHealth { module, status, lastIngestion? }`,
+      `BaseQueryFilters { tenantId, severity?, dateFrom?, dateTo?, page?, pageSize? }`.
+- [ ] `src/common/security-module/security-module.interface.ts` — the generic `SecurityModule`
+      contract from decision 5 above.
+- [ ] `src/common/dto/base-query.dto.ts` — the `class-validator` DTO twin of
+      `BaseQueryFilters`, for controllers to extend (mirrors the existing `ListUsersQueryDto`
+      pagination pattern in `src/users/dto/`).
+- [x] Unit test for nothing yet (no logic in this phase) — just confirm `npx nest start` still
+      boots cleanly with the two new global modules registered.
+
+## Phase 1 — VM module (warm-up, no orchestration dependency)
+
+- [ ] Prisma: `VmAsset { id, tenantId, name, ip, type, createdAt }`, `VmVulnerability { id,
+      tenantId, assetId, severity Severity, description, cveId String?, status enum (OPEN |
+      REMEDIATED | ACCEPTED_RISK, default OPEN), rawData Json?, createdAt }`. Index `tenantId`
+      on both, per this project's existing convention.
+- [ ] `VmService implements SecurityModule<VmVulnerability, VmQueryFilters>`:
+      `ingest(event)` (upsert `VmAsset` by `(tenantId, ip)` if `data` references one, then create
+      `VmVulnerability`), `query(filters)`, `healthCheck()`, `listAssets(tenantId)`,
+      `createAsset(tenantId, dto)`, `updateVulnerabilityStatus(tenantId, id, status)`.
+      + `vm.service.spec.ts` (mocked `PrismaService`, same pattern as `users.service.spec.ts`).
+- [ ] `VmController`: `GET /vm/assets`, `POST /vm/assets` (Analyst/Admin), `GET
+      /vm/vulnerabilities` (query-param filters), `PATCH /vm/vulnerabilities/:id/status`
+      (Analyst/Admin), `POST /vm/events` (ingestion, Admin-gated per decision 7).
+      + `vm.controller.spec.ts` (mocked service).
+- [ ] `test/vm.e2e-spec.ts` — full HTTP through the real guard chain, mocked `PrismaService` at
+      module level (same pattern as `test/users.e2e-spec.ts`/`test/tenants.e2e-spec.ts`).
+
+## Phase 2 — EDR module
+
+- [ ] Prisma: `EdrEndpoint { id, tenantId, hostname, ip, os, status, lastSeen }`,
+      `EdrDetection { id, tenantId, endpointId, detectionName, severity Severity, rawData Json?,
+      createdAt }`.
+- [ ] `EdrService implements SecurityModule<EdrDetection, EdrQueryFilters>`: `ingest(event)`
+      (upsert `EdrEndpoint` by `(tenantId, hostname)`, create `EdrDetection`, then
+      `eventEmitter.emit('edr.detection.created', event)`), `query()`, `healthCheck()`,
+      `listEndpoints(tenantId)`. + `edr.service.spec.ts` (assert the emit call happens, via a
+      mocked `EventEmitter2`).
+- [ ] `EdrController`: `POST /edr/events` (ingestion), `GET /edr/endpoints`, `GET
+      /edr/detections`. + `edr.controller.spec.ts`.
+- [ ] `test/edr.e2e-spec.ts`.
+
+## Phase 3 — SIEM module (listens to EDR)
+
+- [ ] Prisma: `SiemLog { id, tenantId, source, eventType, severity Severity, rawData Json?,
+      timestamp }`, `SiemAlert { id, tenantId, title, severity Severity, status enum (OPEN |
+      ASSIGNED | ESCALATED | RESOLVED, default OPEN), assignedToUserId String?, rawData Json?,
+      createdAt }`.
+- [ ] `SiemService implements SecurityModule<SiemAlert, SiemQueryFilters>`: `ingest(event)`
+      (always writes `SiemLog`; creates a `SiemAlert` too when `type === 'alert'` or severity is
+      HIGH/CRITICAL — keep the threshold simple and explicit for MVP, it's meant to be revisited,
+      not a clever heuristic), `query()`, `healthCheck()`, `updateAlertStatus(tenantId, id,
+      status, assignedToUserId?)`. + `siem.service.spec.ts`.
+- [ ] `@OnEvent('edr.detection.created') handleEdrDetection(event: UnifiedEvent)` on
+      `SiemService` — turns an EDR detection into a `SiemAlert`, then emits
+      `siem.alert.created`. + unit test asserting the listener fires and produces the alert.
+- [ ] `SiemController`: `POST /siem/events`, `GET /siem/logs`, `GET /siem/alerts`, `PATCH
+      /siem/alerts/:id` (assign/escalate/resolve — Analyst/Admin only, Viewer blocked, matching
+      the frontend's already-deferred "no row-level actions until a real SIEM module exists").
+      + `siem.controller.spec.ts`.
+- [ ] `test/siem.e2e-spec.ts` — include a test that actually POSTs an EDR event and asserts a
+      `SiemAlert` shows up via `GET /siem/alerts` (first real cross-module integration test).
+
+## Phase 4 — CTI module (enriches SIEM alerts)
+
+- [ ] Prisma: `CtiIoc { id, tenantId, type, value, confidence, source, rawData Json?,
+      createdAt }`.
+- [ ] `CtiService implements SecurityModule<CtiIoc, CtiQueryFilters>`: `ingest(event)`,
+      `query()`, `healthCheck()`, `checkMatch(tenantId, value): Promise<CtiIoc | null>`.
+      + `cti.service.spec.ts`.
+- [ ] `@OnEvent('siem.alert.created') handleSiemAlert(event)` on `CtiService` — pulls a
+      matchable value out of `event.data`, calls `checkMatch`; on a hit, emits
+      `cti.enrichment.applied` carrying the escalated severity (per decision 6 — CTI never calls
+      `SiemService` directly). + unit test for both the match and no-match paths.
+- [ ] `SiemService` gains `@OnEvent('cti.enrichment.applied') handleEnrichment(...)` — applies
+      the escalated severity to the referenced `SiemAlert`. + unit test.
+- [ ] `CtiController`: `POST /cti/iocs` (manual entry, Analyst/Admin), `GET /cti/iocs`, `POST
+      /cti/events`. + `cti.controller.spec.ts`.
+- [ ] `test/cti.e2e-spec.ts` — include the full chain: EDR event → SIEM alert → CTI match →
+      alert severity escalated.
+
+## Phase 5 — SOAR module (triggers off SIEM/CTI)
+
+- [ ] Prisma: `SoarPlaybook { id, tenantId, name, triggerCondition Json, actions Json,
+      createdAt }`, `SoarExecution { id, tenantId, playbookId, alertId, status enum (PENDING |
+      RUNNING | SUCCESS | FAILED), logs String?, createdAt }`.
+- [ ] `SoarService implements SecurityModule<SoarExecution, SoarQueryFilters>`: `ingest()`,
+      `query()`, `healthCheck()`, `evaluateTriggers(tenantId, event: UnifiedEvent)` (loads active
+      playbooks, does a simple exact-match check of `triggerCondition` against the event —
+      e.g. `{ severity: 'CRITICAL' }` — creates a `SoarExecution` row, simulated per decision 8,
+      then emits `soar.execution.created`). + `soar.service.spec.ts`.
+- [ ] `@OnEvent('siem.alert.created')` and `@OnEvent('cti.enrichment.applied')` on `SoarService`
+      → both call `evaluateTriggers`. + unit tests.
+- [ ] `SoarController`: `GET /soar/playbooks`, `POST /soar/playbooks` (Admin only — playbooks are
+      configuration, not day-to-day analyst work), `GET /soar/executions`. +
+      `soar.controller.spec.ts`.
+- [ ] `test/soar.e2e-spec.ts`.
+
+## Phase 6 — DFIR module (aggregates everything)
+
+- [ ] Prisma: `DfirIncident { id, tenantId, title, severity Severity, status enum (OPEN |
+      INVESTIGATING | CONTAINED | RESOLVED, default OPEN), createdAt }`, `DfirLink { id,
+      incidentId, sourceType, sourceId }` (polymorphic — `sourceType` is a `ModuleName` plus
+      `'soar_execution'`/whatever record kind, `sourceId` is that record's id, no FK constraint
+      since it points across tables by design, same shape as the spec).
+- [ ] `DfirService implements SecurityModule<DfirIncident, DfirQueryFilters>`: `ingest()`,
+      `query()`, `healthCheck()`, `createIncidentFromEvent(tenantId, event, links:
+      {sourceType, sourceId}[])`, `linkRecord(incidentId, sourceType, sourceId)`,
+      `getIncidentDetail(tenantId, id)` (incident + its `DfirLink[]`, this is the data behind
+      the spec's Figure 4 incident-detail screen), `updateStatus(tenantId, id, status)`.
+      + `dfir.service.spec.ts`.
+- [ ] `@OnEvent('soar.execution.created') handleSoarExecution(event)` on `DfirService` — creates
+      an incident, links the originating alert and the SOAR execution. + unit test.
+- [ ] `DfirController`: `GET /dfir/incidents`, `GET /dfir/incidents/:id`, `PATCH
+      /dfir/incidents/:id` (status transitions, Analyst/Admin), `POST
+      /dfir/incidents/:id/links`. + `dfir.controller.spec.ts`.
+- [ ] `test/dfir.e2e-spec.ts` — the big one: POST an EDR event and assert the *entire* chain
+      lands a `DfirIncident` with links back to the SIEM alert and the SOAR execution.
+
+## Phase 7 — Asset aggregator (cross-module read view)
+
+- [ ] `AssetService.getUnifiedFeed(tenantId, filters: BaseQueryFilters)` — calls each of the six
+      modules' own `query()` and merges + sorts the results by timestamp in application code
+      (recommended over a SQL `UNION` for now: keeps modules decoupled through the same contract
+      everything else uses; revisit only if this becomes a real performance bottleneck at scale).
+      Projects every record down to the shared fields only (`id, source, type, severity,
+      timestamp, summary`) — this is the view that's genuinely "one unified shape," per the
+      earlier design discussion. + `asset.service.spec.ts`.
+- [ ] `AssetController`: `GET /assets/feed`. + `asset.controller.spec.ts` +
+      `test/asset.e2e-spec.ts`.
+
+## Phase 8 — Real-time delivery (SSE)
+
+- [ ] `EventsController` — `@Sse('events/stream')`, subscribes to the shared `EventEmitter2`,
+      filters by `request.user.tenantId` before forwarding anything (never leak cross-tenant
+      events over this stream). + a unit test asserting the tenant filter actually excludes
+      other tenants' events.
+- [ ] Manual verification: `curl -N` against the endpoint with a real JWT, ingest something via
+      an existing module route in another terminal, confirm the event arrives on the stream.
+- [ ] **Not in this phase:** proxying this through the Next.js BFF layer — that's frontend work,
+      and per the earlier design discussion, streaming through a Next.js Route Handler needs its
+      own doc-check (`node_modules/next/dist/docs/`) before assuming it behaves like a normal
+      proxied route. Flag as a follow-up frontend task when this phase is done.
+
+## Phase 9 — Scheduled polling ingestion skeleton
+
+- [ ] `interface ModuleDataSourceAdapter { fetchSince(config: Record<string, unknown>, since?:
+      Date): Promise<RawRecord[]> }` in `src/common/security-module/`.
+- [ ] `MockAdapter implements ModuleDataSourceAdapter` — returns canned fake records per module,
+      so the cron path is real and testable without any actual vendor access (per root
+      `CLAUDE.md`: module API docs are still an open input).
+- [ ] `PollingService` — `@Cron()` job iterating `TenantModule` rows where `isActive: true`,
+      calling the right module's adapter (via the `MockAdapter` for now) + that module's
+      `ingest()`, then updating a `lastSyncedAt` value in `TenantModule.config`.
+      + `polling.service.spec.ts`.
+- [ ] Real per-vendor adapters are explicitly **not** part of this plan — out of scope until
+      real module API documentation exists (root `CLAUDE.md`'s "open input required" note).
+
+## Phase 10 — Seed data for local dev / demo
+
+- [ ] Extend `prisma/seed.ts` (or a new `prisma/seed-modules.ts`, wired the same way) with
+      representative rows across all six modules for the existing seeded tenant(s) — this is
+      what lets you demo the dashboard without waiting on Phase 9's polling or any real vendor.
+
+## Phase 11 — Final integration pass
+
+- [ ] One full end-to-end smoke test walking the real chain manually (or scripted): a VM finding
+      (independent), then a POSTed EDR event that produces a SIEM alert, gets CTI-checked,
+      triggers a SOAR execution, and lands a DFIR incident linking all of it — same "live,
+      not just unit-tested" verification standard the rest of this project has held itself to.
+- [ ] Revisit `GET /api/health`'s indicator list per this file's own existing note ("Add new
+      named indicators here... once modules gain their own independent external dependencies").
+- [ ] Add a "Modules — Development Log" section to `docs/internship-report-backend.md`,
+      mirroring §4's chronological format, and update this file's summary sections once the six
+      modules are no longer "explicitly deferred."

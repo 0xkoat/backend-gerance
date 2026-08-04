@@ -10,6 +10,8 @@ import { APP_GUARD } from '@nestjs/core';
 import { RolesGuard } from './auth/guards/roles.guard';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { MustChangePasswordGuard } from './auth/guards/must-change-password.guard';
+import { EventEmitterModule } from '@nestjs/event-emitter';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
@@ -18,6 +20,8 @@ import { MustChangePasswordGuard } from './auth/guards/must-change-password.guar
     TenantsModule,
     HealthModule,
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 10 }]),
+    EventEmitterModule.forRoot(),
+    ScheduleModule.forRoot()
   ],
   controllers: [AppController],
   providers: [
