@@ -1,9 +1,9 @@
-import { ModuleName, Severity } from 'src/generated/prisma/enums';
+import { ModuleName, Severity } from '../../generated/prisma/enums';
 
 export type EventType =
   'alert' | 'detection' | 'vulnerability' | 'event' | 'ioc';
 
-export { Severity, ModuleName } from 'src/generated/prisma/enums';
+export { Severity, ModuleName } from '../../generated/prisma/enums';
 
 export interface UnifiedEvent {
   tenantId: string;
