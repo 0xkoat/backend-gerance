@@ -44,7 +44,11 @@ describe('JwtAuthGuard', () => {
   it('delegates to the jwt strategy when the route is not public', async () => {
     jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(false);
     superCanActivateSpy.mockResolvedValue(true);
-    const context = buildContext({ userId: '1', role: 'ADMIN', tenantId: 't1' });
+    const context = buildContext({
+      userId: '1',
+      role: 'ADMIN',
+      tenantId: 't1',
+    });
 
     const result = await guard.canActivate(context);
 
@@ -56,7 +60,9 @@ describe('JwtAuthGuard', () => {
     jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(false);
     superCanActivateSpy.mockResolvedValue(false);
 
-    await expect(guard.canActivate(buildContext())).rejects.toThrow(UnauthorizedException);
+    await expect(guard.canActivate(buildContext())).rejects.toThrow(
+      UnauthorizedException,
+    );
   });
 
   it('throws UnauthorizedException if no user ends up on the request', async () => {

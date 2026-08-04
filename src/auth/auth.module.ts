@@ -16,11 +16,11 @@ if (!jwtSecret) {
     PassportModule,
     JwtModule.register({
       secret: jwtSecret,
-      signOptions: { expiresIn: '1h' }, 
+      signOptions: { expiresIn: '1h' },
     }),
     UsersModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],
 })
-export class AuthModule {}  
+export class AuthModule {}

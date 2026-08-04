@@ -34,7 +34,9 @@ describe('RolesGuard', () => {
   });
 
   it('allows access when the user role is in the required list', () => {
-    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue([UserRole.ADMIN]);
+    jest
+      .spyOn(reflector, 'getAllAndOverride')
+      .mockReturnValue([UserRole.ADMIN]);
 
     const result = guard.canActivate(
       buildContext({ userId: '1', role: UserRole.ADMIN, tenantId: 't1' }),
@@ -44,7 +46,9 @@ describe('RolesGuard', () => {
   });
 
   it('denies access when the user role is not in the required list', () => {
-    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue([UserRole.ADMIN]);
+    jest
+      .spyOn(reflector, 'getAllAndOverride')
+      .mockReturnValue([UserRole.ADMIN]);
 
     const result = guard.canActivate(
       buildContext({ userId: '1', role: UserRole.VIEWER, tenantId: 't1' }),
@@ -66,8 +70,12 @@ describe('RolesGuard', () => {
   });
 
   it('throws UnauthorizedException when roles are required but there is no user on the request', () => {
-    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue([UserRole.ADMIN]);
+    jest
+      .spyOn(reflector, 'getAllAndOverride')
+      .mockReturnValue([UserRole.ADMIN]);
 
-    expect(() => guard.canActivate(buildContext(undefined))).toThrow(UnauthorizedException);
+    expect(() => guard.canActivate(buildContext(undefined))).toThrow(
+      UnauthorizedException,
+    );
   });
 });

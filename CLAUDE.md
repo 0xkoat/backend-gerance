@@ -310,12 +310,25 @@ polling-ingestion skeleton come after all six modules exist, since they all read
    require `@Roles(ANALYST, ADMIN)` (matches the spec's "Analyst investigates, can trigger SOAR;
    Viewer is read-only" role description); Super Admin has no tenant, so no module routes apply
    to it, same as the existing `[module]` stub's reasoning on the frontend.
+10. **`TenantModule.sourceType` (`PLATFORM | OWN`) and the `ModuleSourceType` enum are removed
+    from the schema entirely — decided 2026-08-04.** Considered keeping it unused-but-present
+    first, then decided against: not valuable for MVP (every module is treated as Gérance-
+    provided), and a repo-wide grep confirmed zero code anywhere referenced it. If a
+    tenant-brings-their-own-external-account scenario becomes real later, re-add it then — a
+    single nullable-enum-column migration is cheap, and there's nothing to reconcile since
+    nothing was ever built against it.
 
 ## Phase 0 — Foundation (do this before any module)
 
+- [x] **Phase 0.0 — Remove `TenantModule.sourceType` and the `ModuleSourceType` enum from
+      `schema.prisma`** (decision 10 above). Delete the `sourceType ModuleSourceType
+      @default(PLATFORM)` field from `TenantModule` and the `enum ModuleSourceType { PLATFORM
+      OWN }` block entirely, then `npx prisma migrate dev --name remove_module_source_type`.
+      Nothing else in the codebase references either symbol (verified via repo-wide grep), so
+      this is a clean, self-contained removal with no follow-on edits anywhere else.
 - [x] Install `@nestjs/event-emitter` and `@nestjs/schedule`; wire `EventEmitterModule.forRoot()`
       and `ScheduleModule.forRoot()` into `AppModule`.
-- [ ] `src/common/security-module/types.ts` — `Severity` (also add as a Prisma enum in
+- [x] `src/common/security-module/types.ts` — `Severity` (also add as a Prisma enum in
       `schema.prisma`), `UnifiedEvent { tenantId, timestamp, source: ModuleName, type, severity,
       data: Record<string, unknown> }`, `ModuleHealth { module, status, lastIngestion? }`,
       `BaseQueryFilters { tenantId, severity?, dateFrom?, dateTo?, page?, pageSize? }`.

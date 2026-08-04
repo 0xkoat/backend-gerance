@@ -21,7 +21,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     HealthModule,
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 10 }]),
     EventEmitterModule.forRoot(),
-    ScheduleModule.forRoot()
+    ScheduleModule.forRoot(),
   ],
   controllers: [AppController],
   providers: [

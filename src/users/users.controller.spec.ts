@@ -212,9 +212,9 @@ describe('UsersController', () => {
     });
 
     it('throws ForbiddenException when the caller has no tenantId', async () => {
-      await expect(
-        controller.getAllUsers(noTenantAdmin, {}),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(controller.getAllUsers(noTenantAdmin, {})).rejects.toThrow(
+        ForbiddenException,
+      );
       expect(mockUsersService.findAllForTenant).not.toHaveBeenCalled();
     });
   });
@@ -433,11 +433,9 @@ describe('UsersController', () => {
     it('routes a Super Admin caller to resetSoleAdminPassword instead of the tenant-scoped path', async () => {
       mockUsersService.resetSoleAdminPassword.mockResolvedValue(undefined);
 
-      const result = await controller.resetUserPassword(
-        superAdmin,
-        'admin-1',
-        { newPassword: 'New-password1!' },
-      );
+      const result = await controller.resetUserPassword(superAdmin, 'admin-1', {
+        newPassword: 'New-password1!',
+      });
 
       expect(mockUsersService.resetSoleAdminPassword).toHaveBeenCalledWith(
         'admin-1',
