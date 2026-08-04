@@ -28,3 +28,9 @@ export interface BaseQueryFilters {
   page?: number;
   pageSize?: number;
 }
+
+export interface CtiEnrichmentPayload {
+  tenantId: string;
+  alertId: string;
+  severity: Severity;
+}

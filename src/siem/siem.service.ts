@@ -12,7 +12,10 @@ import {
   BaseQueryFilters,
   ModuleHealth,
 } from '../common/security-module/types';
-import type { UnifiedEvent } from '../common/security-module/types';
+import type {
+  CtiEnrichmentPayload,
+  UnifiedEvent,
+} from '../common/security-module/types';
 
 export interface SiemQueryFilters extends BaseQueryFilters {
   status?: SiemAlertStatus;
@@ -78,6 +81,14 @@ export class SiemService implements SecurityModule<
         ...event.data,
         title: `${data.detectionName} on ${data.hostname}`,
       },
+    });
+  }
+
+  @OnEvent('cti.enrichment.applied')
+  async handleEnrichment(payload: CtiEnrichmentPayload): Promise<void> {
+    await this.prisma.siemAlert.updateMany({
+      where: { id: payload.alertId, tenantId: payload.tenantId },
+      data: { severity: payload.severity },
     });
   }
 

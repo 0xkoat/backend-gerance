@@ -25,6 +25,7 @@ model Tenant {
   edrDetections     EdrDetection[]
   siemLogs          SiemLog[]
   siemAlerts        SiemAlert[]
+  ctiIocs           CtiIoc[]
 }
 
 enum UserRole {
@@ -113,6 +114,29 @@ model VmVulnerability {
   status      VmVulnerabilitiesStatus @default(OPEN)
   rawData     Json?
 
+  @@index([tenantId])
+}
+
+enum CtiIocType {
+  IP
+  DOMAIN
+  URL
+  HASH
+  EMAIL
+}
+
+model CtiIoc {
+  id         String     @id @default(uuid()) @db.Uuid
+  tenantId   String     @db.Uuid
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  type       CtiIocType
+  value      String
+  confidence Int
+  source     String
+  rawData    Json?
+  createdAt  DateTime   @default(now())
+
+  @@unique([tenantId, type, value])
   @@index([tenantId])
 }
 

@@ -395,20 +395,20 @@ polling-ingestion skeleton come after all six modules exist, since they all read
 
 ## Phase 4 — CTI module (enriches SIEM alerts)
 
-- [ ] Prisma: `CtiIoc { id, tenantId, type, value, confidence, source, rawData Json?,
+- [x] Prisma: `CtiIoc { id, tenantId, type, value, confidence, source, rawData Json?,
       createdAt }`.
-- [ ] `CtiService implements SecurityModule<CtiIoc, CtiQueryFilters>`: `ingest(event)`,
+- [x] `CtiService implements SecurityModule<CtiIoc, CtiQueryFilters>`: `ingest(event)`,
       `query()`, `healthCheck()`, `checkMatch(tenantId, value): Promise<CtiIoc | null>`.
       + `cti.service.spec.ts`.
-- [ ] `@OnEvent('siem.alert.created') handleSiemAlert(event)` on `CtiService` — pulls a
+- [x] `@OnEvent('siem.alert.created') handleSiemAlert(event)` on `CtiService` — pulls a
       matchable value out of `event.data`, calls `checkMatch`; on a hit, emits
       `cti.enrichment.applied` carrying the escalated severity (per decision 6 — CTI never calls
       `SiemService` directly). + unit test for both the match and no-match paths.
-- [ ] `SiemService` gains `@OnEvent('cti.enrichment.applied') handleEnrichment(...)` — applies
+- [x] `SiemService` gains `@OnEvent('cti.enrichment.applied') handleEnrichment(...)` — applies
       the escalated severity to the referenced `SiemAlert`. + unit test.
-- [ ] `CtiController`: `POST /cti/iocs` (manual entry, Analyst/Admin), `GET /cti/iocs`, `POST
+- [x] `CtiController`: `POST /cti/iocs` (manual entry, Analyst/Admin), `GET /cti/iocs`, `POST
       /cti/events`. + `cti.controller.spec.ts`.
-- [ ] `test/cti.e2e-spec.ts` — include the full chain: EDR event → SIEM alert → CTI match →
+- [x] `test/cti.e2e-spec.ts` — include the full chain: EDR event → SIEM alert → CTI match →
       alert severity escalated.
 
 ## Phase 5 — SOAR module (triggers off SIEM/CTI)
