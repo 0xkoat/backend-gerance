@@ -334,7 +334,7 @@ polling-ingestion skeleton come after all six modules exist, since they all read
       `BaseQueryFilters { tenantId, severity?, dateFrom?, dateTo?, page?, pageSize? }`.
 - [x] `src/common/security-module/security-module.interface.ts` — the generic `SecurityModule`
       contract from decision 5 above.
-- [ ] `src/common/dto/base-query.dto.ts` — the `class-validator` DTO twin of
+- [x] `src/common/dto/base-query.dto.ts` — the `class-validator` DTO twin of
       `BaseQueryFilters`, for controllers to extend (mirrors the existing `ListUsersQueryDto`
       pagination pattern in `src/users/dto/`).
 - [x] Unit test for nothing yet (no logic in this phase) — just confirm `npx nest start` still
