@@ -28,6 +28,7 @@ model Tenant {
   ctiIocs           CtiIoc[]
   soarPlaybooks     SoarPlaybook[]
   soarExecutions    SoarExecution[]
+  dfirIncidents     DfirIncident[]
 }
 
 enum UserRole {
@@ -246,4 +247,45 @@ model SoarExecution {
   createdAt  DateTime            @default(now())
 
   @@index([tenantId])
+}
+
+enum DfirIncidentStatus {
+  OPEN
+  INVESTIGATING
+  CONTAINED
+  RESOLVED
+}
+
+model DfirIncident {
+  id        String             @id @default(uuid()) @db.Uuid
+  tenantId  String             @db.Uuid
+  tenant    Tenant             @relation(fields: [tenantId], references: [id])
+  title     String
+  severity  Severity
+  status    DfirIncidentStatus @default(OPEN)
+  createdAt DateTime           @default(now())
+  links     DfirLink[]
+
+  @@index([tenantId])
+}
+
+enum DfirLinkSourceType {
+  SIEM_ALERT
+  SIEM_LOG
+  EDR_DETECTION
+  VM_VULNERABILITY
+  CTI_IOC
+  SOAR_EXECUTION
+}
+
+model DfirLink {
+  id         String             @id @default(uuid()) @db.Uuid
+  tenantId   String             @db.Uuid
+  incidentId String             @db.Uuid
+  incident   DfirIncident       @relation(fields: [incidentId], references: [id])
+  sourceType DfirLinkSourceType
+  sourceId   String             @db.Uuid
+
+  @@index([tenantId])
+  @@index([incidentId])
 }
