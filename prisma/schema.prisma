@@ -23,6 +23,8 @@ model Tenant {
   vmVulnerabilities VmVulnerability[]
   edrEndpoints      EdrEndpoint[]
   edrDetections     EdrDetection[]
+  siemLogs          SiemLog[]
+  siemAlerts        SiemAlert[]
 }
 
 enum UserRole {
@@ -33,18 +35,19 @@ enum UserRole {
 }
 
 model User {
-  id                       String    @id @default(uuid()) @db.Uuid
-  email                    String    @unique
+  id                       String      @id @default(uuid()) @db.Uuid
+  email                    String      @unique
   phoneNumber              String
   name                     String
-  role                     UserRole  @default(VIEWER)
+  role                     UserRole    @default(VIEWER)
   hashedPassword           String
-  tenantId                 String?   @db.Uuid
-  tenant                   Tenant?   @relation(fields: [tenantId], references: [id])
+  tenantId                 String?     @db.Uuid
+  tenant                   Tenant?     @relation(fields: [tenantId], references: [id])
   passwordResetRequestedAt DateTime?
-  mustChangePassword       Boolean   @default(false)
-  createdAt                DateTime  @default(now())
-  updatedAt                DateTime  @updatedAt
+  mustChangePassword       Boolean     @default(false)
+  createdAt                DateTime    @default(now())
+  updatedAt                DateTime    @updatedAt
+  assignedSiemAlerts       SiemAlert[]
 
   @@index([tenantId])
 }
@@ -144,6 +147,41 @@ model EdrDetection {
   severity      Severity
   rawData       Json?
   createdAt     DateTime    @default(now())
+
+  @@index([tenantId])
+}
+
+model SiemLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  source    String
+  eventType String
+  severity  Severity
+  rawData   Json?
+  timestamp DateTime @default(now())
+
+  @@index([tenantId])
+}
+
+enum SiemAlertStatus {
+  OPEN
+  ASSIGNED
+  ESCALATED
+  RESOLVED
+}
+
+model SiemAlert {
+  id               String          @id @default(uuid()) @db.Uuid
+  tenantId         String          @db.Uuid
+  tenant           Tenant          @relation(fields: [tenantId], references: [id])
+  title            String
+  severity         Severity
+  status           SiemAlertStatus @default(OPEN)
+  assignedToUserId String?         @db.Uuid
+  assignedToUser   User?           @relation(fields: [assignedToUserId], references: [id])
+  rawData          Json?
+  createdAt        DateTime        @default(now())
 
   @@index([tenantId])
 }
