@@ -26,8 +26,7 @@ export class HealthController {
   check() {
     return this.health.check([
       () => this.prismaIndicator.pingCheck('database', this.prisma),
-      () =>
-        this.memoryIndicator.checkHeap('memory_heap', HEAP_THRESHOLD_BYTES),
+      () => this.memoryIndicator.checkHeap('memory_heap', HEAP_THRESHOLD_BYTES),
       () => this.memoryIndicator.checkRSS('memory_rss', RSS_THRESHOLD_BYTES),
     ]);
   }

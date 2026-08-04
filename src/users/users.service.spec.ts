@@ -127,10 +127,7 @@ describe('UsersService', () => {
     });
 
     it('computes skip from the requested page', async () => {
-      (mockPrismaService.$transaction as jest.Mock).mockResolvedValue([
-        [],
-        45,
-      ]);
+      (mockPrismaService.$transaction as jest.Mock).mockResolvedValue([[], 45]);
 
       await service.findAllForTenant('tenant-1', 3, 20);
 
@@ -140,10 +137,7 @@ describe('UsersService', () => {
     });
 
     it('returns an empty page when the tenant has no users', async () => {
-      (mockPrismaService.$transaction as jest.Mock).mockResolvedValue([
-        [],
-        0,
-      ]);
+      (mockPrismaService.$transaction as jest.Mock).mockResolvedValue([[], 0]);
 
       const result = await service.findAllForTenant('empty-tenant', 1, 20);
 
@@ -519,7 +513,7 @@ describe('UsersService', () => {
   });
 
   describe('hasPendingPasswordRequestsForAdmin', () => {
-    it('returns false when the caller is not the tenant\'s first-created Admin', async () => {
+    it("returns false when the caller is not the tenant's first-created Admin", async () => {
       mockPrismaService.user.findFirst.mockResolvedValue({ id: 'first-admin' });
 
       const result = await service.hasPendingPasswordRequestsForAdmin(
