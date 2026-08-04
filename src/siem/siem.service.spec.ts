@@ -21,6 +21,7 @@ const mockPrismaService = {
     findFirst: jest.fn(),
     findUnique: jest.fn(),
     update: jest.fn(),
+    updateMany: jest.fn(),
   },
 };
 
@@ -187,6 +188,23 @@ describe('SiemService', () => {
         'siem.alert.created',
         expect.anything(),
       );
+    });
+  });
+
+  describe('handleEnrichment', () => {
+    it('applies the escalated severity to the referenced alert, scoped to the tenant', async () => {
+      mockPrismaService.siemAlert.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.handleEnrichment({
+        tenantId: 'tenant-1',
+        alertId: 'alert-1',
+        severity: Severity.CRITICAL,
+      });
+
+      expect(mockPrismaService.siemAlert.updateMany).toHaveBeenCalledWith({
+        where: { id: 'alert-1', tenantId: 'tenant-1' },
+        data: { severity: Severity.CRITICAL },
+      });
     });
   });
 
