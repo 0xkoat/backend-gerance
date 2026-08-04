@@ -374,23 +374,23 @@ polling-ingestion skeleton come after all six modules exist, since they all read
 
 ## Phase 3 — SIEM module (listens to EDR)
 
-- [ ] Prisma: `SiemLog { id, tenantId, source, eventType, severity Severity, rawData Json?,
+- [x] Prisma: `SiemLog { id, tenantId, source, eventType, severity Severity, rawData Json?,
       timestamp }`, `SiemAlert { id, tenantId, title, severity Severity, status enum (OPEN |
       ASSIGNED | ESCALATED | RESOLVED, default OPEN), assignedToUserId String?, rawData Json?,
       createdAt }`.
-- [ ] `SiemService implements SecurityModule<SiemAlert, SiemQueryFilters>`: `ingest(event)`
+- [x] `SiemService implements SecurityModule<SiemAlert, SiemQueryFilters>`: `ingest(event)`
       (always writes `SiemLog`; creates a `SiemAlert` too when `type === 'alert'` or severity is
       HIGH/CRITICAL — keep the threshold simple and explicit for MVP, it's meant to be revisited,
       not a clever heuristic), `query()`, `healthCheck()`, `updateAlertStatus(tenantId, id,
       status, assignedToUserId?)`. + `siem.service.spec.ts`.
-- [ ] `@OnEvent('edr.detection.created') handleEdrDetection(event: UnifiedEvent)` on
+- [x] `@OnEvent('edr.detection.created') handleEdrDetection(event: UnifiedEvent)` on
       `SiemService` — turns an EDR detection into a `SiemAlert`, then emits
       `siem.alert.created`. + unit test asserting the listener fires and produces the alert.
-- [ ] `SiemController`: `POST /siem/events`, `GET /siem/logs`, `GET /siem/alerts`, `PATCH
+- [x] `SiemController`: `POST /siem/events`, `GET /siem/logs`, `GET /siem/alerts`, `PATCH
       /siem/alerts/:id` (assign/escalate/resolve — Analyst/Admin only, Viewer blocked, matching
       the frontend's already-deferred "no row-level actions until a real SIEM module exists").
       + `siem.controller.spec.ts`.
-- [ ] `test/siem.e2e-spec.ts` — include a test that actually POSTs an EDR event and asserts a
+- [x] `test/siem.e2e-spec.ts` — include a test that actually POSTs an EDR event and asserts a
       `SiemAlert` shows up via `GET /siem/alerts` (first real cross-module integration test).
 
 ## Phase 4 — CTI module (enriches SIEM alerts)
