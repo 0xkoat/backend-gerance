@@ -351,11 +351,11 @@ polling-ingestion skeleton come after all six modules exist, since they all read
       `VmVulnerability`), `query(filters)`, `healthCheck()`, `listAssets(tenantId)`,
       `createAsset(tenantId, dto)`, `updateVulnerabilityStatus(tenantId, id, status)`.
       + `vm.service.spec.ts` (mocked `PrismaService`, same pattern as `users.service.spec.ts`).
-- [ ] `VmController`: `GET /vm/assets`, `POST /vm/assets` (Analyst/Admin), `GET
+- [x] `VmController`: `GET /vm/assets`, `POST /vm/assets` (Analyst/Admin), `GET
       /vm/vulnerabilities` (query-param filters), `PATCH /vm/vulnerabilities/:id/status`
       (Analyst/Admin), `POST /vm/events` (ingestion, Admin-gated per decision 7).
       + `vm.controller.spec.ts` (mocked service).
-- [ ] `test/vm.e2e-spec.ts` — full HTTP through the real guard chain, mocked `PrismaService` at
+- [x] `test/vm.e2e-spec.ts` — full HTTP through the real guard chain, mocked `PrismaService` at
       module level (same pattern as `test/users.e2e-spec.ts`/`test/tenants.e2e-spec.ts`).
 
 ## Phase 2 — EDR module
