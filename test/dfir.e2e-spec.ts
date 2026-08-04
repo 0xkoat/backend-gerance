@@ -1,15 +1,20 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication, ValidationPipe } from '@nestjs/common';
+import {
+  INestApplication,
+  NotFoundException,
+  ValidationPipe,
+} from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types';
 import * as argon2 from 'argon2';
 import { AppModule } from './../src/app.module';
 import { UsersService } from './../src/users/users.service';
-import { CtiService } from './../src/cti/cti.service';
+import { DfirService } from './../src/dfir/dfir.service';
 import { PrismaService } from './../src/prisma/prisma.service';
 import {
   CtiIocType,
-  ModuleName,
+  DfirIncidentStatus,
+  DfirLinkSourceType,
   Severity,
   UserRole,
 } from './../src/generated/prisma/enums';
@@ -73,7 +78,7 @@ const usersByEmail: Record<string, FakeUser> = {
   [noTenantAdminUser.email]: noTenantAdminUser,
 };
 
-describe('CtiController (e2e)', () => {
+describe('DfirController (e2e)', () => {
   let app: INestApplication<App>;
   let hashedPassword: string;
 
@@ -81,9 +86,11 @@ describe('CtiController (e2e)', () => {
     findByEmail: jest.fn(),
   };
 
-  const mockCtiService = {
+  const mockDfirService = {
     query: jest.fn(),
-    ingest: jest.fn(),
+    getIncidentDetail: jest.fn(),
+    updateStatus: jest.fn(),
+    linkRecord: jest.fn(),
   };
 
   async function loginAs(email: string): Promise<string> {
@@ -111,8 +118,8 @@ describe('CtiController (e2e)', () => {
     })
       .overrideProvider(UsersService)
       .useValue(mockUsersService)
-      .overrideProvider(CtiService)
-      .useValue(mockCtiService)
+      .overrideProvider(DfirService)
+      .useValue(mockDfirService)
       .overrideProvider(PrismaService)
       .useValue({
         onModuleInit: jest.fn(),
@@ -136,47 +143,76 @@ describe('CtiController (e2e)', () => {
     await app.close();
   });
 
-  describe('GET /cti/iocs', () => {
+  describe('GET /dfir/incidents', () => {
     it('allows any authenticated tenant role and merges tenantId into the query', async () => {
       const token = await loginAs(viewerUser.email);
-      mockCtiService.query.mockResolvedValue([]);
+      mockDfirService.query.mockResolvedValue([]);
 
       await request(app.getHttpServer())
-        .get('/api/cti/iocs?type=IP')
+        .get('/api/dfir/incidents?status=OPEN')
         .set('Authorization', `Bearer ${token}`)
         .expect(200);
 
-      expect(mockCtiService.query).toHaveBeenCalledWith(
-        expect.objectContaining({ tenantId: 'tenant-1', type: CtiIocType.IP }),
+      expect(mockDfirService.query).toHaveBeenCalledWith(
+        expect.objectContaining({
+          tenantId: 'tenant-1',
+          status: DfirIncidentStatus.OPEN,
+        }),
       );
     });
   });
 
-  describe('POST /cti/iocs', () => {
-    const body = {
-      type: CtiIocType.IP,
-      value: '185.220.101.47',
-      confidence: 85,
-      source: 'AlienVault OTX',
-    };
-
-    it('allows an Analyst to manually add an IOC', async () => {
-      const token = await loginAs(analystUser.email);
-      mockCtiService.ingest.mockResolvedValue(undefined);
+  describe('GET /dfir/incidents/:id', () => {
+    it('returns the incident detail', async () => {
+      const token = await loginAs(viewerUser.email);
+      mockDfirService.getIncidentDetail.mockResolvedValue({
+        id: 'incident-1',
+        tenantId: 'tenant-1',
+        links: [],
+      });
 
       await request(app.getHttpServer())
-        .post('/api/cti/iocs')
+        .get('/api/dfir/incidents/incident-1')
         .set('Authorization', `Bearer ${token}`)
-        .send(body)
-        .expect(201);
+        .expect(200);
 
-      expect(mockCtiService.ingest).toHaveBeenCalledWith(
-        expect.objectContaining({
-          tenantId: 'tenant-1',
-          source: ModuleName.CTI,
-          type: 'ioc',
-          data: expect.objectContaining({ value: '185.220.101.47' }),
-        }),
+      expect(mockDfirService.getIncidentDetail).toHaveBeenCalledWith(
+        'tenant-1',
+        'incident-1',
+      );
+    });
+
+    it('returns 404 when the service reports the incident as not found', async () => {
+      const token = await loginAs(viewerUser.email);
+      mockDfirService.getIncidentDetail.mockRejectedValue(
+        new NotFoundException('Incident not found'),
+      );
+
+      await request(app.getHttpServer())
+        .get('/api/dfir/incidents/missing-id')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(404);
+    });
+  });
+
+  describe('PATCH /dfir/incidents/:id', () => {
+    it('allows an Analyst to update incident status', async () => {
+      const token = await loginAs(analystUser.email);
+      mockDfirService.updateStatus.mockResolvedValue({
+        id: 'incident-1',
+        status: DfirIncidentStatus.RESOLVED,
+      });
+
+      await request(app.getHttpServer())
+        .patch('/api/dfir/incidents/incident-1')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ status: DfirIncidentStatus.RESOLVED })
+        .expect(200);
+
+      expect(mockDfirService.updateStatus).toHaveBeenCalledWith(
+        'tenant-1',
+        'incident-1',
+        DfirIncidentStatus.RESOLVED,
       );
     });
 
@@ -184,68 +220,62 @@ describe('CtiController (e2e)', () => {
       const token = await loginAs(viewerUser.email);
 
       await request(app.getHttpServer())
-        .post('/api/cti/iocs')
+        .patch('/api/dfir/incidents/incident-1')
         .set('Authorization', `Bearer ${token}`)
-        .send(body)
+        .send({ status: DfirIncidentStatus.RESOLVED })
         .expect(403);
-      expect(mockCtiService.ingest).not.toHaveBeenCalled();
-    });
-
-    it('rejects a confidence value outside 0-100', async () => {
-      const token = await loginAs(analystUser.email);
-
-      await request(app.getHttpServer())
-        .post('/api/cti/iocs')
-        .set('Authorization', `Bearer ${token}`)
-        .send({ ...body, confidence: 150 })
-        .expect(400);
-      expect(mockCtiService.ingest).not.toHaveBeenCalled();
+      expect(mockDfirService.updateStatus).not.toHaveBeenCalled();
     });
   });
 
-  describe('POST /cti/events', () => {
-    it('rejects an Analyst (generic ingestion is Admin-only)', async () => {
+  describe('POST /dfir/incidents/:id/links', () => {
+    it('allows an Analyst to link a record', async () => {
       const token = await loginAs(analystUser.email);
+      mockDfirService.linkRecord.mockResolvedValue({ id: 'link-1' });
 
       await request(app.getHttpServer())
-        .post('/api/cti/events')
+        .post('/api/dfir/incidents/incident-1/links')
         .set('Authorization', `Bearer ${token}`)
         .send({
-          type: CtiIocType.IP,
-          value: '1.2.3.4',
-          confidence: 50,
-          source: 'test',
-        })
-        .expect(403);
-      expect(mockCtiService.ingest).not.toHaveBeenCalled();
-    });
-
-    it('allows an Admin to ingest via the generic events route', async () => {
-      const token = await loginAs(adminUser.email);
-      mockCtiService.ingest.mockResolvedValue(undefined);
-
-      await request(app.getHttpServer())
-        .post('/api/cti/events')
-        .set('Authorization', `Bearer ${token}`)
-        .send({
-          type: CtiIocType.IP,
-          value: '1.2.3.4',
-          confidence: 50,
-          source: 'test',
+          sourceType: DfirLinkSourceType.CTI_IOC,
+          sourceId: '11111111-1111-4111-8111-111111111111',
         })
         .expect(201);
 
-      expect(mockCtiService.ingest).toHaveBeenCalled();
+      expect(mockDfirService.linkRecord).toHaveBeenCalledWith(
+        'tenant-1',
+        'incident-1',
+        DfirLinkSourceType.CTI_IOC,
+        '11111111-1111-4111-8111-111111111111',
+      );
+    });
+
+    it('rejects an invalid sourceId (not a UUID)', async () => {
+      const token = await loginAs(analystUser.email);
+
+      await request(app.getHttpServer())
+        .post('/api/dfir/incidents/incident-1/links')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          sourceType: DfirLinkSourceType.CTI_IOC,
+          sourceId: 'not-a-uuid',
+        })
+        .expect(400);
+      expect(mockDfirService.linkRecord).not.toHaveBeenCalled();
     });
   });
 });
 
-describe('EDR -> SIEM -> CTI integration (e2e, real event chain)', () => {
+describe('EDR -> SIEM -> CTI -> SOAR -> DFIR integration (e2e, full chain)', () => {
   let app: INestApplication<App>;
   let hashedPassword: string;
 
   let siemAlerts: Array<Record<string, unknown>>;
   let ctiIocs: Array<Record<string, unknown>>;
+  let soarPlaybooks: Array<Record<string, unknown>>;
+  let soarExecutions: Array<Record<string, unknown>>;
+  let dfirIncidents: Array<Record<string, unknown>>;
+  let dfirLinks: Array<Record<string, unknown>>;
   let idCounter: number;
 
   const mockUsersService = {
@@ -282,6 +312,11 @@ describe('EDR -> SIEM -> CTI integration (e2e, real event chain)', () => {
           siemAlerts.push(alert);
           return Promise.resolve(alert);
         }),
+      findUnique: jest
+        .fn()
+        .mockImplementation(({ where }: { where: { id: string } }) =>
+          Promise.resolve(siemAlerts.find((a) => a.id === where.id) ?? null),
+        ),
       findMany: jest
         .fn()
         .mockImplementation(({ where }: { where: { tenantId: string } }) =>
@@ -336,12 +371,97 @@ describe('EDR -> SIEM -> CTI integration (e2e, real event chain)', () => {
             ),
         ),
     },
-    // Stub below exists only so SOAR's real @OnEvent listeners (also wired
-    // globally via AppModule) don't throw when this suite's
-    // 'siem.alert.created'/'cti.enrichment.applied' emits reach them — this
-    // file doesn't assert on SOAR's behavior, it just needs it to no-op.
     soarPlaybook: {
-      findMany: jest.fn().mockResolvedValue([]),
+      create: jest
+        .fn()
+        .mockImplementation(({ data }: { data: Record<string, unknown> }) => {
+          const playbook = {
+            id: `playbook-${++idCounter}`,
+            createdAt: new Date(),
+            ...data,
+          };
+          soarPlaybooks.push(playbook);
+          return Promise.resolve(playbook);
+        }),
+      findMany: jest
+        .fn()
+        .mockImplementation(({ where }: { where: { tenantId: string } }) =>
+          Promise.resolve(
+            soarPlaybooks.filter((p) => p.tenantId === where.tenantId),
+          ),
+        ),
+    },
+    soarExecution: {
+      create: jest
+        .fn()
+        .mockImplementation(({ data }: { data: Record<string, unknown> }) => {
+          const execution = {
+            id: `execution-${++idCounter}`,
+            createdAt: new Date(),
+            ...data,
+          };
+          soarExecutions.push(execution);
+          return Promise.resolve(execution);
+        }),
+      findMany: jest
+        .fn()
+        .mockImplementation(({ where }: { where: { tenantId: string } }) =>
+          Promise.resolve(
+            soarExecutions.filter((e) => e.tenantId === where.tenantId),
+          ),
+        ),
+    },
+    dfirIncident: {
+      create: jest
+        .fn()
+        .mockImplementation(({ data }: { data: Record<string, unknown> }) => {
+          const incident = {
+            id: `incident-${++idCounter}`,
+            createdAt: new Date(),
+            ...data,
+          };
+          dfirIncidents.push(incident);
+          return Promise.resolve(incident);
+        }),
+      findUnique: jest
+        .fn()
+        .mockImplementation(
+          ({
+            where,
+            include,
+          }: {
+            where: { id: string };
+            include?: { links: boolean };
+          }) => {
+            const incident = dfirIncidents.find((i) => i.id === where.id);
+            if (!incident) {
+              return Promise.resolve(null);
+            }
+            if (include?.links) {
+              return Promise.resolve({
+                ...incident,
+                links: dfirLinks.filter((l) => l.incidentId === incident.id),
+              });
+            }
+            return Promise.resolve(incident);
+          },
+        ),
+      findMany: jest
+        .fn()
+        .mockImplementation(({ where }: { where: { tenantId: string } }) =>
+          Promise.resolve(
+            dfirIncidents.filter((i) => i.tenantId === where.tenantId),
+          ),
+        ),
+    },
+    dfirLink: {
+      create: jest
+        .fn()
+        .mockImplementation(({ data }: { data: Record<string, unknown> }) => {
+          const link = { id: `link-${++idCounter}`, ...data };
+          dfirLinks.push(link);
+          return Promise.resolve(link);
+        }),
     },
   };
 
@@ -362,6 +482,10 @@ describe('EDR -> SIEM -> CTI integration (e2e, real event chain)', () => {
     jest.clearAllMocks();
     siemAlerts = [];
     ctiIocs = [];
+    soarPlaybooks = [];
+    soarExecutions = [];
+    dfirIncidents = [];
+    dfirLinks = [];
     idCounter = 0;
     mockUsersService.findByEmail.mockImplementation((email: string) => {
       const user = usersByEmail[email];
@@ -397,8 +521,18 @@ describe('EDR -> SIEM -> CTI integration (e2e, real event chain)', () => {
     await app.close();
   });
 
-  it('an EDR event whose IP matches a known CTI IOC escalates the resulting SIEM alert to CRITICAL', async () => {
+  it('a single EDR event walks the entire chain and lands a DFIR incident linked to the alert and the execution', async () => {
     const adminToken = await loginAs(adminUser.email);
+
+    await request(app.getHttpServer())
+      .post('/api/soar/playbooks')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        name: 'Isolate host on critical alert',
+        triggerCondition: { severity: 'CRITICAL' },
+        actions: { isolateHost: true },
+      })
+      .expect(201);
 
     await request(app.getHttpServer())
       .post('/api/cti/iocs')
@@ -425,23 +559,49 @@ describe('EDR -> SIEM -> CTI integration (e2e, real event chain)', () => {
 
     const viewerToken = await loginAs(viewerUser.email);
     const response = await request(app.getHttpServer())
-      .get('/api/siem/alerts')
+      .get('/api/dfir/incidents')
       .set('Authorization', `Bearer ${viewerToken}`)
       .expect(200);
 
-    const alerts = response.body as Array<{
-      severity: Severity;
+    const incidents = response.body as Array<{
+      id: string;
       tenantId: string;
+      title: string;
+      severity: Severity;
     }>;
-    expect(alerts).toHaveLength(1);
-    expect(alerts[0]).toMatchObject({
+    expect(incidents).toHaveLength(1);
+    expect(incidents[0]).toMatchObject({
       tenantId: 'tenant-1',
       severity: Severity.CRITICAL,
     });
+    expect(incidents[0].title).toContain('Outbound C2 beaconing detected');
+
+    const detailResponse = await request(app.getHttpServer())
+      .get(`/api/dfir/incidents/${incidents[0].id}`)
+      .set('Authorization', `Bearer ${viewerToken}`)
+      .expect(200);
+
+    const detail = detailResponse.body as {
+      links: Array<{ sourceType: string; sourceId: string }>;
+    };
+    expect(detail.links).toHaveLength(2);
+    expect(detail.links.map((l) => l.sourceType).sort()).toEqual(
+      [DfirLinkSourceType.SIEM_ALERT, DfirLinkSourceType.SOAR_EXECUTION].sort(),
+    );
   });
 
-  it('an EDR event with no matching IOC leaves the SIEM alert at its original severity', async () => {
+  it('an EDR event with no matching IOC never reaches SOAR or DFIR', async () => {
     const adminToken = await loginAs(adminUser.email);
+
+    await request(app.getHttpServer())
+      .post('/api/soar/playbooks')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        name: 'Isolate host on critical alert',
+        triggerCondition: { severity: 'CRITICAL' },
+        actions: { isolateHost: true },
+      })
+      .expect(201);
 
     await request(app.getHttpServer())
       .post('/api/edr/events')
@@ -457,12 +617,10 @@ describe('EDR -> SIEM -> CTI integration (e2e, real event chain)', () => {
 
     const viewerToken = await loginAs(viewerUser.email);
     const response = await request(app.getHttpServer())
-      .get('/api/siem/alerts')
+      .get('/api/dfir/incidents')
       .set('Authorization', `Bearer ${viewerToken}`)
       .expect(200);
 
-    const alerts = response.body as Array<{ severity: Severity }>;
-    expect(alerts).toHaveLength(1);
-    expect(alerts[0].severity).toBe(Severity.HIGH);
+    expect(response.body).toEqual([]);
   });
 });

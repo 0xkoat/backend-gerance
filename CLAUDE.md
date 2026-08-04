@@ -430,23 +430,23 @@ polling-ingestion skeleton come after all six modules exist, since they all read
 
 ## Phase 6 — DFIR module (aggregates everything)
 
-- [ ] Prisma: `DfirIncident { id, tenantId, title, severity Severity, status enum (OPEN |
+- [x] Prisma: `DfirIncident { id, tenantId, title, severity Severity, status enum (OPEN |
       INVESTIGATING | CONTAINED | RESOLVED, default OPEN), createdAt }`, `DfirLink { id,
       incidentId, sourceType, sourceId }` (polymorphic — `sourceType` is a `ModuleName` plus
       `'soar_execution'`/whatever record kind, `sourceId` is that record's id, no FK constraint
       since it points across tables by design, same shape as the spec).
-- [ ] `DfirService implements SecurityModule<DfirIncident, DfirQueryFilters>`: `ingest()`,
+- [x] `DfirService implements SecurityModule<DfirIncident, DfirQueryFilters>`: `ingest()`,
       `query()`, `healthCheck()`, `createIncidentFromEvent(tenantId, event, links:
       {sourceType, sourceId}[])`, `linkRecord(incidentId, sourceType, sourceId)`,
       `getIncidentDetail(tenantId, id)` (incident + its `DfirLink[]`, this is the data behind
       the spec's Figure 4 incident-detail screen), `updateStatus(tenantId, id, status)`.
       + `dfir.service.spec.ts`.
-- [ ] `@OnEvent('soar.execution.created') handleSoarExecution(event)` on `DfirService` — creates
+- [x] `@OnEvent('soar.execution.created') handleSoarExecution(event)` on `DfirService` — creates
       an incident, links the originating alert and the SOAR execution. + unit test.
-- [ ] `DfirController`: `GET /dfir/incidents`, `GET /dfir/incidents/:id`, `PATCH
+- [x] `DfirController`: `GET /dfir/incidents`, `GET /dfir/incidents/:id`, `PATCH
       /dfir/incidents/:id` (status transitions, Analyst/Admin), `POST
       /dfir/incidents/:id/links`. + `dfir.controller.spec.ts`.
-- [ ] `test/dfir.e2e-spec.ts` — the big one: POST an EDR event and assert the *entire* chain
+- [x] `test/dfir.e2e-spec.ts` — the big one: POST an EDR event and assert the *entire* chain
       lands a `DfirIncident` with links back to the SIEM alert and the SOAR execution.
 
 ## Phase 7 — Asset aggregator (cross-module read view)
@@ -502,9 +502,11 @@ polling-ingestion skeleton come after all six modules exist, since they all read
       not just unit-tested" verification standard the rest of this project has held itself to.
 - [ ] Revisit `GET /api/health`'s indicator list per this file's own existing note ("Add new
       named indicators here... once modules gain their own independent external dependencies").
-- [ ] Add a "Modules — Development Log" section to `docs/internship-report-backend.md`,
+- [x] Add a "Modules — Development Log" section to `docs/internship-report-backend.md`,
       mirroring §4's chronological format, and update this file's summary sections once the six
-      modules are no longer "explicitly deferred."
+      modules are no longer "explicitly deferred." Done 2026-08-05 as §4.14, covering Phases
+      0-6. Worth a light follow-up pass once Phases 7-11 (Asset aggregator, SSE, polling, seed,
+      final integration) land, so the dev log doesn't drift from what's actually built.
 
 ## Phase 12 — Deferred: introduce `Logger` project-wide
 

@@ -306,6 +306,17 @@ describe('EDR -> SIEM integration (e2e, real event chain)', () => {
             siemAlerts.filter((a) => a.tenantId === where.tenantId),
           ),
         ),
+      updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    },
+    // Stubs below exist only so CTI's/SOAR's real @OnEvent listeners
+    // (also wired globally via AppModule) don't throw when this suite's
+    // 'siem.alert.created' emits reach them — this file doesn't assert on
+    // their behavior, it just needs them to no-op cleanly.
+    ctiIoc: {
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
+    soarPlaybook: {
+      findMany: jest.fn().mockResolvedValue([]),
     },
   };
 

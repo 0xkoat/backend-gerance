@@ -278,6 +278,11 @@ describe('EDR -> SIEM -> CTI -> SOAR integration (e2e, real event chain)', () =>
           siemAlerts.push(alert);
           return Promise.resolve(alert);
         }),
+      findUnique: jest
+        .fn()
+        .mockImplementation(({ where }: { where: { id: string } }) =>
+          Promise.resolve(siemAlerts.find((a) => a.id === where.id) ?? null),
+        ),
       findMany: jest
         .fn()
         .mockImplementation(({ where }: { where: { tenantId: string } }) =>
@@ -371,6 +376,21 @@ describe('EDR -> SIEM -> CTI -> SOAR integration (e2e, real event chain)', () =>
             soarExecutions.filter((e) => e.tenantId === where.tenantId),
           ),
         ),
+    },
+    // Stubs below exist only so DFIR's real @OnEvent listener (also wired
+    // globally via AppModule) doesn't throw when this suite's
+    // 'soar.execution.created' emits reach it — this file doesn't assert on
+    // DFIR's behavior, it just needs it to complete cleanly.
+    dfirIncident: {
+      create: jest
+        .fn()
+        .mockResolvedValue({ id: 'incident-stub', tenantId: 'tenant-1' }),
+      findUnique: jest
+        .fn()
+        .mockResolvedValue({ id: 'incident-stub', tenantId: 'tenant-1' }),
+    },
+    dfirLink: {
+      create: jest.fn().mockResolvedValue({ id: 'link-stub' }),
     },
   };
 
