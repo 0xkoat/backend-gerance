@@ -332,7 +332,7 @@ polling-ingestion skeleton come after all six modules exist, since they all read
       `schema.prisma`), `UnifiedEvent { tenantId, timestamp, source: ModuleName, type, severity,
       data: Record<string, unknown> }`, `ModuleHealth { module, status, lastIngestion? }`,
       `BaseQueryFilters { tenantId, severity?, dateFrom?, dateTo?, page?, pageSize? }`.
-- [ ] `src/common/security-module/security-module.interface.ts` — the generic `SecurityModule`
+- [x] `src/common/security-module/security-module.interface.ts` — the generic `SecurityModule`
       contract from decision 5 above.
 - [ ] `src/common/dto/base-query.dto.ts` — the `class-validator` DTO twin of
       `BaseQueryFilters`, for controllers to extend (mirrors the existing `ListUsersQueryDto`
