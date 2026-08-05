@@ -80,6 +80,7 @@ describe('TenantsController (e2e)', () => {
     $transaction: jest.fn(),
     onModuleInit: jest.fn(),
     onModuleDestroy: jest.fn(),
+    refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
   };
 
   async function loginAs(email: string): Promise<string> {

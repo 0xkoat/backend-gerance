@@ -5,6 +5,7 @@ import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './jwt.strategy';
 import { UsersModule } from '../users/users.module';
+import { PrismaModule } from '../prisma/prisma.module';
 
 const jwtSecret = process.env.JWT_SECRET;
 if (!jwtSecret) {
@@ -16,9 +17,10 @@ if (!jwtSecret) {
     PassportModule,
     JwtModule.register({
       secret: jwtSecret,
-      signOptions: { expiresIn: '1h' },
+      signOptions: { expiresIn: '15m' },
     }),
     UsersModule,
+    PrismaModule,
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy],

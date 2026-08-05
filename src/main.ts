@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
 import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 
 declare const module: any;
@@ -19,6 +20,16 @@ async function bootstrap() {
       },
     }),
   );
+
+  app.use(cookieParser());
+
+  // credentials: true is required for the browser to send/accept the
+  // httpOnly refresh-token cookie; a wildcard origin is incompatible with
+  // that, so FRONTEND_URL must be set to the frontend's exact origin.
+  app.enableCors({
+    origin: process.env.FRONTEND_URL,
+    credentials: true,
+  });
 
   app.setGlobalPrefix('api');
 

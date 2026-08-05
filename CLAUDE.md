@@ -205,6 +205,64 @@ Hard rules that follow from this:
   to enumerate which emails have accounts (argon2's cost makes the found-vs-not-found timing
   gap large enough to be trivially measurable otherwise; verified empirically at ~78ms).
 
+# Auth: refresh token rotation & logout (added 2026-08-05)
+
+Replaces the earlier "stateless JWT only, no refresh tokens, no sessions" design (still the
+description you'll find in older internal docs/notes — this section supersedes it). Driven
+by two gaps identified while auditing what the backend still didn't cover once all six
+security modules were done: no session revocation (a leaked access token was valid for a
+full hour with no way to kill it), and no way for a client to stay logged in beyond that
+hour without re-entering credentials.
+
+- `RefreshToken` model: `{ id, userId, tokenHash, familyId, expiresAt, revokedAt,
+  replacedByTokenId?, createdAt }`. `tokenHash` is SHA-256 (not argon2) — the raw token is
+  already a 32-byte random value from `crypto.randomBytes`, not a human password, so a fast
+  hash is enough to protect the DB-at-rest copy without taxing every refresh call.
+- Access token lifetime dropped from `1h` to `15m`. This — not a blocklist — is the real
+  mitigation for a stolen access token: a stateless JWT can't be revoked before it expires
+  without reintroducing shared state, and Redis stays out of scope, so the fix is shrinking
+  the window instead.
+- **Rotation on every use, with reuse detection.** `POST /auth/refresh` revokes the
+  presented refresh token and issues a new one in the same `familyId`. If a token that's
+  already been revoked is presented again — a stolen-and-replayed token, since the
+  legitimate client would only ever hold the latest one — the entire family is revoked,
+  not just that one request, forcing a fresh login. Standard OWASP-recommended pattern.
+- **Delivery: httpOnly cookie, not the response body.** `access_token` still comes back in
+  the JSON body from `/auth/login` and `/auth/refresh` (unchanged shape), but the refresh
+  token never does — it's set as a `refresh_token` cookie (`httpOnly`, `SameSite=Lax`,
+  `Path=/api/auth` so the browser only attaches it to auth routes). This requires
+  `app.enableCors({ origin: process.env.FRONTEND_URL, credentials: true })` in `main.ts`
+  (a wildcard CORS origin is incompatible with `credentials: true`) and `cookie-parser`
+  wired via `app.use(cookieParser())` — every e2e spec that exercises these routes has to
+  replicate that same `app.use(cookieParser())` call in its own test bootstrap, since e2e
+  tests build their `INestApplication` directly from `AppModule` rather than calling the
+  real `main.ts`. `SameSite=Lax` assumes the frontend reaches this API same-site (e.g. via
+  a Next.js BFF proxy, per root `CLAUDE.md`'s SSE note on that same topology question) —
+  revisit to `SameSite=None` + HTTPS if the frontend ends up calling this API cross-site
+  directly instead.
+- `POST /auth/logout` revokes only the presented session's refresh token — **logout kills
+  just that session, not every session for the user** (a deliberate choice: no "log out
+  everywhere" endpoint exists). It's `@SkipPasswordCheck()`'d so an account stuck in the
+  mandatory first-login password-change flow can still log out, but still requires a valid
+  (possibly soon-to-expire) access token like any other authenticated route — there's no
+  `@Public()` on it.
+- Scheduled daily cleanup (`AuthService.cleanupExpiredRefreshTokens`, `@Cron
+  (EVERY_DAY_AT_MIDNIGHT)`, reusing the `@nestjs/schedule` wiring Phase 9's polling skeleton
+  already set up) deletes only rows past their own `expiresAt` — a revoked-but-not-yet-
+  expired row is deliberately left alone, since it's what lets a later `refresh()` call
+  detect replay and kill the family; deleting it early would silently drop that
+  defense-in-depth.
+- Verified three ways: full unit + e2e suites (331 unit / 133 e2e passing, including a
+  dedicated `test/auth.e2e-spec.ts` covering rotate → replay-rejected → family-killed and
+  logout → cookie-cleared → refresh-rejected), and live against the real dev server +
+  Postgres with a real seeded Admin account — confirmed the cookie's actual `Set-Cookie`
+  attributes, the family-kill behavior on replay, and that logout without a valid access
+  token is rejected.
+- **Deliberately not built here**: a "logout everywhere" endpoint (see above), and
+  machine-to-machine auth (API keys) for the `POST /<module>/events` ingestion routes —
+  a related but separate gap, still gated behind `@Roles(ADMIN)` as a stand-in per decision
+  7 in the module implementation plan below.
+
 # API surface & operational hardening
 
 - All routes are served under a global `/api` prefix (`app.setGlobalPrefix('api')` in
@@ -709,12 +767,27 @@ polling-ingestion skeleton come after all six modules exist, since they all read
 
 ## Phase 11 — Final integration pass
 
-- [ ] One full end-to-end smoke test walking the real chain manually (or scripted): a VM finding
-      (independent), then a POSTed EDR event that produces a SIEM alert, gets CTI-checked,
-      triggers a SOAR execution, and lands a DFIR incident linking all of it — same "live,
-      not just unit-tested" verification standard the rest of this project has held itself to.
-- [ ] Revisit `GET /api/health`'s indicator list per this file's own existing note ("Add new
-      named indicators here... once modules gain their own independent external dependencies").
+- [x] One full end-to-end smoke test walking the real chain, done live 2026-08-05 against a real
+      running server + Postgres, in a fresh dedicated tenant: an independent VM finding
+      (`POST /vm/events`, unrelated to the rest of the chain) landed correctly on its own; then a
+      SOAR playbook (`{severity: CRITICAL}` trigger) and a matching CTI IOC were seeded first, and
+      one `POST /edr/events` walked the entire documented chain in a single request — EDR
+      detection created → SIEM alert created at HIGH → CTI match escalated it to CRITICAL → SOAR
+      fired against the playbook → DFIR incident created, linked to both the `SIEM_ALERT` and the
+      `SOAR_EXECUTION`. Confirmed via `GET` on every module plus `GET /assets/feed` (all 7
+      resulting entries present — VM×2, EDR, SIEM, CTI, SOAR, DFIR — correctly tenant-scoped).
+      Cleanup (`DELETE /tenants/:id` on this tenant) doubled as a regression check for the
+      task #52 fix, this time against a tenant with real data in *every* module simultaneously,
+      not just the partial EDR+SIEM case that fix was originally verified against — deleted
+      cleanly.
+- [x] Revisited `GET /api/health`'s indicator list 2026-08-05 — **no new indicator added,
+      deliberately**: the note's own trigger condition ("once modules gain their own independent
+      external dependencies, e.g. SIEM's Elastic cluster") still isn't met. All six modules read
+      and write through the same shared `PrismaService`/Postgres already covered by the
+      `database` indicator, and Phase 9's polling explicitly runs on `MockAdapter` — fully
+      synthetic, no real external connection — since real per-vendor adapters remain out of
+      scope pending the still-open module-API-docs input from root `CLAUDE.md`. Revisit again
+      once any module actually gains a real external dependency, not before.
 - [x] Add a "Modules — Development Log" section to `docs/internship-report-backend.md`,
       mirroring §4's chronological format, and update this file's summary sections once the six
       modules are no longer "explicitly deferred." Done 2026-08-05 as §4.14, covering Phases

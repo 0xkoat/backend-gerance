@@ -124,6 +124,7 @@ describe('DfirController (e2e)', () => {
       .useValue({
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
+        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
       })
       .compile();
 
@@ -530,6 +531,7 @@ describe('EDR -> SIEM -> CTI -> SOAR -> DFIR integration (e2e, full chain)', () 
         ...statefulPrisma,
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
+        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
       })
       .compile();
 

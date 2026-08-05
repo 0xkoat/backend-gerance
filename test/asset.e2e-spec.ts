@@ -105,6 +105,7 @@ describe('AssetController (e2e)', () => {
       .useValue({
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
+        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
       })
       .compile();
 
@@ -472,6 +473,7 @@ describe('EDR -> SIEM -> CTI -> SOAR -> DFIR -> Asset feed integration (e2e, ful
         ...statefulPrisma,
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
+        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
       })
       .compile();
 
