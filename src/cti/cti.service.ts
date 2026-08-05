@@ -39,9 +39,6 @@ export class CtiService implements SecurityModule<CtiIoc, CtiQueryFilters> {
       },
     };
 
-    // upsert() alone can't tell us create vs. update, and cti.ioc.created
-    // should only fire once per IOC — a re-ingested/re-submitted IOC just
-    // refreshes confidence/source, it isn't a new feed-worthy record.
     const existing = await this.prisma.ctiIoc.findUnique({ where });
 
     const ioc = await this.prisma.ctiIoc.upsert({
