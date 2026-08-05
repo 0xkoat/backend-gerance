@@ -54,7 +54,7 @@ export class EdrService implements SecurityModule<
       },
     });
 
-    await this.prisma.edrDetection.create({
+    const detection = await this.prisma.edrDetection.create({
       data: {
         tenantId: event.tenantId,
         endpointId: endpoint.id,
@@ -64,7 +64,10 @@ export class EdrService implements SecurityModule<
       },
     });
 
-    this.eventEmitter.emit('edr.detection.created', event);
+    this.eventEmitter.emit('edr.detection.created', {
+      ...event,
+      data: { ...event.data, detectionId: detection.id },
+    });
   }
 
   async query(filters: EdrQueryFilters): Promise<EdrDetection[]> {

@@ -370,6 +370,29 @@ describe('EDR -> SIEM -> CTI -> SOAR -> DFIR integration (e2e, full chain)', () 
               ) ?? null,
             ),
         ),
+      findUnique: jest
+        .fn()
+        .mockImplementation(
+          ({
+            where,
+          }: {
+            where: {
+              tenantId_type_value: {
+                tenantId: string;
+                type: string;
+                value: string;
+              };
+            };
+          }) =>
+            Promise.resolve(
+              ctiIocs.find(
+                (i) =>
+                  i.tenantId === where.tenantId_type_value.tenantId &&
+                  i.type === where.tenantId_type_value.type &&
+                  i.value === where.tenantId_type_value.value,
+              ) ?? null,
+            ),
+        ),
     },
     soarPlaybook: {
       create: jest
@@ -462,6 +485,11 @@ describe('EDR -> SIEM -> CTI -> SOAR -> DFIR integration (e2e, full chain)', () 
           dfirLinks.push(link);
           return Promise.resolve(link);
         }),
+    },
+    // Same reasoning as the other stubs above, for Asset's real @OnEvent
+    // listener on 'edr.detection.created'.
+    assetFeedEntry: {
+      create: jest.fn().mockResolvedValue({}),
     },
   };
 

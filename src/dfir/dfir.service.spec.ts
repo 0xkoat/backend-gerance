@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DfirService, DfirQueryFilters } from './dfir.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -29,6 +30,10 @@ const mockPrismaService = {
   },
 };
 
+const mockEventEmitter = {
+  emit: jest.fn(),
+};
+
 describe('DfirService', () => {
   let service: DfirService;
 
@@ -39,6 +44,7 @@ describe('DfirService', () => {
       providers: [
         DfirService,
         { provide: PrismaService, useValue: mockPrismaService },
+        { provide: EventEmitter2, useValue: mockEventEmitter },
       ],
     }).compile();
 
@@ -106,6 +112,32 @@ describe('DfirService', () => {
       );
 
       expect(mockPrismaService.dfirLink.create).not.toHaveBeenCalled();
+    });
+
+    it('emits dfir.incident.created after persisting the incident', async () => {
+      const createdAt = new Date('2026-08-05T10:25:00Z');
+      mockPrismaService.dfirIncident.create.mockResolvedValue({
+        id: 'incident-1',
+        createdAt,
+      });
+
+      await service.createIncidentFromEvent(
+        'tenant-1',
+        'Incident: Outbound C2 beaconing',
+        Severity.CRITICAL,
+        [],
+      );
+
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+        'dfir.incident.created',
+        {
+          tenantId: 'tenant-1',
+          incidentId: 'incident-1',
+          title: 'Incident: Outbound C2 beaconing',
+          severity: Severity.CRITICAL,
+          timestamp: createdAt,
+        },
+      );
     });
   });
 
@@ -199,6 +231,9 @@ describe('DfirService', () => {
       executionId: 'execution-1',
       alertId: 'alert-1',
       playbookId: 'playbook-1',
+      playbookName: 'Isolate host on critical alert',
+      severity: Severity.CRITICAL,
+      timestamp: new Date('2026-08-05T10:10:00Z'),
     };
 
     it('creates an incident linking the originating alert and the SOAR execution', async () => {

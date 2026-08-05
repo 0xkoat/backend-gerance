@@ -35,9 +35,20 @@ export interface CtiEnrichmentPayload {
   severity: Severity;
 }
 
+export interface DfirIncidentPayload {
+  tenantId: string;
+  incidentId: string;
+  title: string;
+  severity: Severity;
+  timestamp: Date;
+}
+
 export interface SoarExecutionPayload {
   tenantId: string;
   executionId: string;
   alertId: string;
   playbookId: string;
+  playbookName: string;
+  severity: Severity;
+  timestamp: Date;
 }

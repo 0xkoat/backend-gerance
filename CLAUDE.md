@@ -317,6 +317,21 @@ polling-ingestion skeleton come after all six modules exist, since they all read
     tenant-brings-their-own-external-account scenario becomes real later, re-add it then — a
     single nullable-enum-column migration is cheap, and there's nothing to reconcile since
     nothing was ever built against it.
+11. **The Asset feed is a materialized table (`AssetFeedEntry`), not a live fan-out query —
+    decided 2026-08-05.** Phase 7 was originally planned as `AssetService.getUnifiedFeed` calling
+    each module's `query()` live and merging + sorting in application code before paginating.
+    Rejected once multi-tenant production-scale pagination was considered: merging six tables'
+    worth of matching rows in memory on every page request doesn't scale, and offset pagination
+    over an in-memory merge can't be fixed by "just add an index" the way DB-level pagination can.
+    Instead, every module emits a `*.created` event on **every** new record — not just the
+    orchestration-relevant events that already exist — and `AssetService` listens for all of them,
+    writing a denormalized row into its own table. `getUnifiedFeed` becomes one indexed, real
+    `ORDER BY timestamp LIMIT/OFFSET` query. Trade-off accepted deliberately: the feed is
+    eventually-consistent with its source tables (fine for a dashboard feed, would not be fine as
+    a source of truth) in exchange for genuine DB-level pagination. A raw SQL `UNION ALL` across
+    all six tables was considered and rejected again for the same reason as the original phase
+    text: it couples `AssetService` to every module's physical schema, breaking the decoupling
+    decision 6 exists to protect.
 
 ## Phase 0 — Foundation (do this before any module)
 
@@ -449,17 +464,77 @@ polling-ingestion skeleton come after all six modules exist, since they all read
 - [x] `test/dfir.e2e-spec.ts` — the big one: POST an EDR event and assert the *entire* chain
       lands a `DfirIncident` with links back to the SIEM alert and the SOAR execution.
 
-## Phase 7 — Asset aggregator (cross-module read view)
+## Phase 7 — Asset aggregator (materialized feed table, decision 11)
 
-- [ ] `AssetService.getUnifiedFeed(tenantId, filters: BaseQueryFilters)` — calls each of the six
-      modules' own `query()` and merges + sorts the results by timestamp in application code
-      (recommended over a SQL `UNION` for now: keeps modules decoupled through the same contract
-      everything else uses; revisit only if this becomes a real performance bottleneck at scale).
-      Projects every record down to the shared fields only (`id, source, type, severity,
-      timestamp, summary`) — this is the view that's genuinely "one unified shape," per the
-      earlier design discussion. + `asset.service.spec.ts`.
-- [ ] `AssetController`: `GET /assets/feed`. + `asset.controller.spec.ts` +
-      `test/asset.e2e-spec.ts`.
+- [x] Prisma: `AssetFeedEntry { id, tenantId, source ModuleName, type String, severity Severity,
+      timestamp DateTime, summary String, sourceId String, createdAt DateTime @default(now()) }`.
+      Index `(tenantId, timestamp)` — this is the query this whole table exists to serve.
+      Migration `20260805101609_add_asset_feed_entry` applied.
+- [x] Give every module a `*.created` event covering **every** record-creation path, not just the
+      orchestration-relevant ones decision 6's existing events cover. Each module needed a real
+      fix along the way, found while wiring its listener — not one of the six was a clean
+      "just subscribe" case:
+      - **EDR** (`edr.detection.created`, reused): was re-emitting the raw incoming `UnifiedEvent`
+        unchanged, so it never carried the created `EdrDetection`'s `id`. Fine for SIEM's existing
+        listener (doesn't need it), not fine for `AssetService` (needs a `sourceId`). Fixed in
+        `EdrService.ingest` by adding `detectionId: detection.id` into the emitted event's `data`,
+        mirroring the `data.alertId` pattern SIEM's own emit already used.
+      - **SIEM** (`siem.alert.created`, reused; `siem_logs` excluded — too raw/noisy for the feed):
+        the emitted payload spread the *original* input `data`, so when no `title` was supplied
+        and `SiemAlert.title` fell back to `` `${event.source} ${event.type}` ``, the emitted
+        `data.title` stayed `undefined` while the real persisted title was the fallback string.
+        Fixed by emitting the resolved `alert.title` instead of the raw input (DFIR's `ingest()`
+        independently duplicates that same fallback logic today — pre-existing, unrelated code
+        path, left alone).
+      - **SOAR** (`soar.execution.created`, reused): the existing `SoarExecutionPayload` carried
+        no `severity`, `timestamp`, or playbook name at all — it was built only for DFIR's needs
+        (`alertId`/`executionId`). Extended the interface with `playbookName`, `severity`,
+        `timestamp` (sourced from `execution.createdAt`); safe to extend since DFIR's listener
+        doesn't do strict payload equality anywhere.
+      - **VM** (`vm.vulnerability.created`, new): turned out there is no manual
+        vulnerability-creation route at all (only `POST /vm/assets` for assets and
+        `POST /vm/events` for ingestion, both funnel through `ingest()`) — the plan's "both
+        `ingest()` and the manual path" text was written speculatively before checking; corrected
+        to a single emit point in `ingest()`, same single-path situation as DFIR. `VmService`
+        gained an `EventEmitter2` dependency it didn't have before.
+      - **CTI** (`cti.ioc.created`, new): `POST /cti/iocs` and `POST /cti/events` both already
+        funnel through the same `ingest()` (no separate manual-create method existed, unlike the
+        plan assumed) — but `ingest()` uses `upsert()`, and a re-ingested/re-submitted IOC that
+        only refreshes `confidence`/`source` shouldn't fire `*.created` again. Added a
+        `findUnique` pre-check so the event only emits on genuine creation, not on every update.
+      - **DFIR** (`dfir.incident.created`, new): emitted from `createIncidentFromEvent`, the one
+        choke point both `ingest()` and `handleSoarExecution` already funnel through — single
+        clean emit point, no duplication needed. Added a new `DfirIncidentPayload` type
+        (`tenantId, incidentId, title, severity, timestamp`) since, like SOAR, there's no
+        `UnifiedEvent` naturally in scope at that call site. `DfirService` gained an
+        `EventEmitter2` dependency it didn't have before.
+- [x] `AssetService` (new module, `src/asset/`) — `@OnEvent()` listener per event above, each
+      mapping its module-specific payload down to the shared `{ source, type, severity, timestamp,
+      summary, sourceId }` shape and writing an `AssetFeedEntry` row. `type` is always a hardcoded
+      literal per listener (`'detection'`, `'alert'`, `'execution'`, `'vulnerability'`, `'ioc'`,
+      `'incident'`) describing what was just created, not forwarded from the triggering event's
+      own `type` field — that field isn't reliable for this (SIEM alerts can be created by
+      `type: 'event'` inputs when severity alone crosses the threshold) and `AssetFeedEntry.type`
+      is deliberately a plain `String`, not the ingestion-side `EventType`, precisely because it
+      needs to describe record kinds (`'incident'`, `'execution'`) that `EventType` doesn't cover.
+      `AssetModule` wired into `AppModule`. The four stateful e2e mocks that drive events through
+      the real `EventEmitter2` (`siem`/`cti`/`soar`/`dfir`.e2e-spec.ts) each got an
+      `assetFeedEntry.create` stub added (same test-isolation issue as Phase 6.5 — a newly
+      globally-wired module's listener throwing silently inside other suites' event chains); the
+      three that also call `POST /cti/iocs` in their stateful chain (`cti`/`soar`/`dfir`.e2e-spec)
+      additionally needed a `ctiIoc.findUnique` stub once `CtiService.ingest` started calling it.
+      + `asset.service.spec.ts` (one test per listener, asserting the write and the projected
+      shape — no need to mock the other five services, just the event payload in and the Prisma
+      call out). 279 unit / 123 e2e passing.
+- [ ] `AssetService.getUnifiedFeed(tenantId, filters: BaseQueryFilters)` — a single
+      `prisma.assetFeedEntry.findMany` with real `ORDER BY timestamp DESC` + `LIMIT/OFFSET`
+      pagination and the standard severity/date filters. + test in `asset.service.spec.ts`.
+- [ ] `AssetController`: `GET /assets/feed` (read-only, any authenticated tenant role per
+      decision 9). + `asset.controller.spec.ts`.
+- [ ] `test/asset.e2e-spec.ts` — POST a real EDR event through the full chain (same setup as
+      `dfir.e2e-spec.ts`) and assert `GET /assets/feed` shows entries for the EDR detection, the
+      SIEM alert, the SOAR execution, and the DFIR incident all in one timestamp-sorted list —
+      proves the write-side listeners actually fire end-to-end, not just in isolation.
 
 ## Phase 8 — Real-time delivery (SSE)
 

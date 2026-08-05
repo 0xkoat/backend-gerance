@@ -29,6 +29,7 @@ model Tenant {
   soarPlaybooks     SoarPlaybook[]
   soarExecutions    SoarExecution[]
   dfirIncidents     DfirIncident[]
+  assetFeedEntries  AssetFeedEntry[]
 }
 
 enum UserRole {
@@ -288,4 +289,21 @@ model DfirLink {
 
   @@index([tenantId])
   @@index([incidentId])
+}
+
+// Materialized cross-module feed  populated by
+// AssetService's event listeners, never written to directly by another module.
+model AssetFeedEntry {
+  id        String     @id @default(uuid()) @db.Uuid
+  tenantId  String     @db.Uuid
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  source    ModuleName
+  type      String
+  severity  Severity
+  timestamp DateTime
+  summary   String
+  sourceId  String     @db.Uuid
+  createdAt DateTime   @default(now())
+
+  @@index([tenantId, timestamp])
 }

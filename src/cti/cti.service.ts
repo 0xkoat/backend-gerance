@@ -31,14 +31,21 @@ export class CtiService implements SecurityModule<CtiIoc, CtiQueryFilters> {
       source: string;
     };
 
-    await this.prisma.ctiIoc.upsert({
-      where: {
-        tenantId_type_value: {
-          tenantId: event.tenantId,
-          type: data.type,
-          value: data.value,
-        },
+    const where = {
+      tenantId_type_value: {
+        tenantId: event.tenantId,
+        type: data.type,
+        value: data.value,
       },
+    };
+
+    // upsert() alone can't tell us create vs. update, and cti.ioc.created
+    // should only fire once per IOC — a re-ingested/re-submitted IOC just
+    // refreshes confidence/source, it isn't a new feed-worthy record.
+    const existing = await this.prisma.ctiIoc.findUnique({ where });
+
+    const ioc = await this.prisma.ctiIoc.upsert({
+      where,
       update: {
         confidence: data.confidence,
         source: data.source,
@@ -53,6 +60,13 @@ export class CtiService implements SecurityModule<CtiIoc, CtiQueryFilters> {
         rawData: event.data as Prisma.InputJsonValue,
       },
     });
+
+    if (!existing) {
+      this.eventEmitter.emit('cti.ioc.created', {
+        ...event,
+        data: { ...event.data, iocId: ioc.id },
+      });
+    }
   }
 
   async checkMatch(tenantId: string, value: string): Promise<CtiIoc | null> {

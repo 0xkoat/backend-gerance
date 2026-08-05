@@ -65,7 +65,7 @@ export class SiemService implements SecurityModule<
     this.eventEmitter.emit('siem.alert.created', {
       ...event,
       severity: alert.severity,
-      data: { ...event.data, alertId: alert.id },
+      data: { ...event.data, title: alert.title, alertId: alert.id },
     });
   }
 

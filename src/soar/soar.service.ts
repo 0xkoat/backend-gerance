@@ -79,6 +79,9 @@ export class SoarService implements SecurityModule<
         executionId: execution.id,
         alertId,
         playbookId: playbook.id,
+        playbookName: playbook.name,
+        severity,
+        timestamp: execution.createdAt,
       });
     }
   }

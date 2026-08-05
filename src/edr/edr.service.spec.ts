@@ -99,7 +99,7 @@ describe('EdrService', () => {
       });
     });
 
-    it('emits edr.detection.created with the original event after persisting', async () => {
+    it('emits edr.detection.created with the created detection id added to data', async () => {
       mockPrismaService.edrEndpoint.upsert.mockResolvedValue({
         id: 'endpoint-1',
       });
@@ -111,7 +111,7 @@ describe('EdrService', () => {
 
       expect(mockEventEmitter.emit).toHaveBeenCalledWith(
         'edr.detection.created',
-        event,
+        { ...event, data: { ...event.data, detectionId: 'detection-1' } },
       );
     });
   });

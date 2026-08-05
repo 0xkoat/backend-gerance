@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { OnEvent } from '@nestjs/event-emitter';
+import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { DfirIncident, DfirLink, Prisma } from '../generated/prisma/client';
 import {
   DfirIncidentStatus,
@@ -32,7 +32,10 @@ export class DfirService implements SecurityModule<
   DfirIncident,
   DfirQueryFilters
 > {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   async ingest(event: UnifiedEvent): Promise<void> {
     const data = event.data as { title?: string };
@@ -52,6 +55,14 @@ export class DfirService implements SecurityModule<
   ): Promise<DfirIncident> {
     const incident = await this.prisma.dfirIncident.create({
       data: { tenantId, title, severity },
+    });
+
+    this.eventEmitter.emit('dfir.incident.created', {
+      tenantId,
+      incidentId: incident.id,
+      title,
+      severity,
+      timestamp: incident.createdAt,
     });
 
     for (const link of links) {

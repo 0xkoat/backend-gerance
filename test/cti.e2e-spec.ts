@@ -335,6 +335,29 @@ describe('EDR -> SIEM -> CTI integration (e2e, real event chain)', () => {
               ) ?? null,
             ),
         ),
+      findUnique: jest
+        .fn()
+        .mockImplementation(
+          ({
+            where,
+          }: {
+            where: {
+              tenantId_type_value: {
+                tenantId: string;
+                type: string;
+                value: string;
+              };
+            };
+          }) =>
+            Promise.resolve(
+              ctiIocs.find(
+                (i) =>
+                  i.tenantId === where.tenantId_type_value.tenantId &&
+                  i.type === where.tenantId_type_value.type &&
+                  i.value === where.tenantId_type_value.value,
+              ) ?? null,
+            ),
+        ),
     },
     // Stub below exists only so SOAR's real @OnEvent listeners (also wired
     // globally via AppModule) don't throw when this suite's
@@ -342,6 +365,11 @@ describe('EDR -> SIEM -> CTI integration (e2e, real event chain)', () => {
     // file doesn't assert on SOAR's behavior, it just needs it to no-op.
     soarPlaybook: {
       findMany: jest.fn().mockResolvedValue([]),
+    },
+    // Same reasoning, for Asset's real @OnEvent listener on
+    // 'edr.detection.created'.
+    assetFeedEntry: {
+      create: jest.fn().mockResolvedValue({}),
     },
   };
 

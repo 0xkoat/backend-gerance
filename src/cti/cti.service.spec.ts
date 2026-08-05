@@ -8,6 +8,7 @@ import { UnifiedEvent } from '../common/security-module/types';
 const mockPrismaService = {
   ctiIoc: {
     upsert: jest.fn(),
+    findUnique: jest.fn(),
     findFirst: jest.fn(),
     findMany: jest.fn(),
   },
@@ -54,6 +55,7 @@ describe('CtiService', () => {
     };
 
     it('upserts the IOC keyed by tenantId+type+value', async () => {
+      mockPrismaService.ctiIoc.findUnique.mockResolvedValue(null);
       mockPrismaService.ctiIoc.upsert.mockResolvedValue({ id: 'ioc-1' });
 
       await service.ingest(event);
@@ -80,6 +82,27 @@ describe('CtiService', () => {
           rawData: event.data,
         },
       });
+    });
+
+    it('emits cti.ioc.created with the ioc id added to data when the IOC is new', async () => {
+      mockPrismaService.ctiIoc.findUnique.mockResolvedValue(null);
+      mockPrismaService.ctiIoc.upsert.mockResolvedValue({ id: 'ioc-1' });
+
+      await service.ingest(event);
+
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith('cti.ioc.created', {
+        ...event,
+        data: { ...event.data, iocId: 'ioc-1' },
+      });
+    });
+
+    it('does not emit cti.ioc.created when the IOC already existed (update only)', async () => {
+      mockPrismaService.ctiIoc.findUnique.mockResolvedValue({ id: 'ioc-1' });
+      mockPrismaService.ctiIoc.upsert.mockResolvedValue({ id: 'ioc-1' });
+
+      await service.ingest(event);
+
+      expect(mockEventEmitter.emit).not.toHaveBeenCalled();
     });
   });
 
