@@ -676,9 +676,36 @@ polling-ingestion skeleton come after all six modules exist, since they all read
 
 ## Phase 10 — Seed data for local dev / demo
 
-- [ ] Extend `prisma/seed.ts` (or a new `prisma/seed-modules.ts`, wired the same way) with
-      representative rows across all six modules for the existing seeded tenant(s) — this is
-      what lets you demo the dashboard without waiting on Phase 9's polling or any real vendor.
+- [x] New `prisma/seed-modules.ts` — deliberately a **separate** script from `seed.ts`, not
+      wired into `prisma db seed`, run explicitly via `npm run seed:demo`. Kept apart on
+      purpose: `seed.ts` stays scoped to its one narrow, security-sensitive job (one-time Super
+      Admin bootstrap from `seed-data.json`); this one generates a large, throwaway demo
+      dataset and should never fire implicitly off a routine `prisma migrate reset`.
+      Per run: **5 tenants**, each with 8 users (2 Admins, 3 Analysts, 3 Viewers — 40 accounts
+      total) and ~700 rows spread across all six modules + the asset feed (~3500 rows total).
+      All seeded accounts share one password (`DemoPassw0rd!2026`, printed in full at the end of
+      the run alongside every tenant/email/role) — deliberate simplification over unique
+      per-account passwords, since the point is fast exploration across many personas while
+      demoing, not per-account secrecy. Seeded with `mustChangePassword: false` — same
+      precedent as the existing Super Admin bootstrap in `seed.ts` (a direct-Prisma seed
+      script, not the `TenantsService`/`UsersService` API paths the `mustChangePassword: true`
+      hard rule actually targets).
+      Uses `@faker-js/faker` (new devDependency, seed-script-only, never imported by the actual
+      application) for realistic company/person/network/vulnerability data at this volume, and
+      pre-generates every row's UUID client-side so parent+child tables can be bulk-inserted via
+      `createMany` without N+1 round trips (e.g. `VmVulnerability.assetId` set directly from a
+      `VmAsset` id generated moments earlier, never re-fetched). `AssetFeedEntry` rows are
+      written directly too, mirroring what `AssetService`'s real listeners would have produced
+      for the same records — the one deliberate seed-only exception to that table's normal
+      "only `AssetService` writes this" invariant, purely so the unified feed page has demo data
+      without needing to replay the whole event chain for every row.
+      Verified for real, not just "it ran without throwing": row counts confirmed directly
+      against Postgres (5 new tenants, 40 new users, ~3500 new rows, cleanly additive alongside
+      a pre-existing unrelated tenant already in the dev DB), then a live login with a seeded
+      credential against a real running server, followed by real `GET` requests against
+      `/api/vm/assets`, `/api/edr/detections`, `/api/siem/alerts`, `/api/cti/iocs`,
+      `/api/soar/executions`, `/api/dfir/incidents`, and `/api/assets/feed` — all returned real
+      seeded data, correctly tenant-scoped and paginated.
 
 ## Phase 11 — Final integration pass
 
