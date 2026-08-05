@@ -1,7 +1,6 @@
 import {
   Controller,
   Get,
-  ForbiddenException,
   Post,
   Body,
   Param,
@@ -17,21 +16,15 @@ import { IngestSiemEventDto } from './dto/ingestSiemEvent.dto';
 import { UpdateSiemAlertStatusDto } from './dto/updateSiemAlertStatus.dto';
 import { SiemQueryDto } from './dto/siemQuery.dto';
 import type { UnifiedEvent } from '../common/security-module/types';
+import { requireTenantId } from '../common/require-tenant-id';
 
 @Controller('siem')
 export class SiemController {
   constructor(private readonly siemService: SiemService) {}
 
-  private requireTenantId(user: AuthenticatedUser): string {
-    if (!user.tenantId) {
-      throw new ForbiddenException('This account is not scoped to a tenant');
-    }
-    return user.tenantId;
-  }
-
   @Get('logs')
   async listLogs(@CurrentUser() user: AuthenticatedUser) {
-    const tenantId = this.requireTenantId(user);
+    const tenantId = requireTenantId(user);
     return this.siemService.listLogs(tenantId);
   }
 
@@ -40,7 +33,7 @@ export class SiemController {
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: SiemQueryDto,
   ) {
-    const tenantId = this.requireTenantId(user);
+    const tenantId = requireTenantId(user);
     return this.siemService.query({ ...query, tenantId });
   }
 
@@ -51,7 +44,7 @@ export class SiemController {
     @Param('id') id: string,
     @Body() updateSiemAlertStatusDto: UpdateSiemAlertStatusDto,
   ) {
-    const tenantId = this.requireTenantId(user);
+    const tenantId = requireTenantId(user);
     return this.siemService.updateAlertStatus(
       tenantId,
       id,
@@ -66,7 +59,7 @@ export class SiemController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() ingestSiemEventDto: IngestSiemEventDto,
   ) {
-    const tenantId = this.requireTenantId(user);
+    const tenantId = requireTenantId(user);
     const unifiedEvent: UnifiedEvent = {
       tenantId,
       timestamp: new Date(),

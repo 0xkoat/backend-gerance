@@ -525,16 +525,41 @@ polling-ingestion skeleton come after all six modules exist, since they all read
       additionally needed a `ctiIoc.findUnique` stub once `CtiService.ingest` started calling it.
       + `asset.service.spec.ts` (one test per listener, asserting the write and the projected
       shape — no need to mock the other five services, just the event payload in and the Prisma
-      call out). 279 unit / 123 e2e passing.
-- [ ] `AssetService.getUnifiedFeed(tenantId, filters: BaseQueryFilters)` — a single
+      call out).
+- [x] `AssetService.getUnifiedFeed(tenantId, filters: BaseQueryFilters)` — a single
       `prisma.assetFeedEntry.findMany` with real `ORDER BY timestamp DESC` + `LIMIT/OFFSET`
-      pagination and the standard severity/date filters. + test in `asset.service.spec.ts`.
-- [ ] `AssetController`: `GET /assets/feed` (read-only, any authenticated tenant role per
-      decision 9). + `asset.controller.spec.ts`.
-- [ ] `test/asset.e2e-spec.ts` — POST a real EDR event through the full chain (same setup as
-      `dfir.e2e-spec.ts`) and assert `GET /assets/feed` shows entries for the EDR detection, the
-      SIEM alert, the SOAR execution, and the DFIR incident all in one timestamp-sorted list —
-      proves the write-side listeners actually fire end-to-end, not just in isolation.
+      pagination and the standard severity/date filters. + tests in `asset.service.spec.ts`
+      (default pagination, severity filter, date-range filter, custom page/pageSize, return
+      passthrough).
+- [x] `AssetController`: `GET /assets/feed` (read-only, any authenticated tenant role per
+      decision 9). Caught before wiring it in: route was `@Controller('asset')` (singular,
+      should be `assets` to match this task's own `GET /assets/feed` and the "Asset aggregator"
+      naming), and both its DTO/helper imports (`BaseQueryDto`, `requireTenantId`) used the
+      `src/...`-absolute path form — same failure class as `asset.service.ts`'s earlier
+      `browser` import bug, but this time not latent: both are genuine runtime values
+      (`BaseQueryDto` as a real decorator-metadata class reference, `requireTenantId` as an
+      actual function call), so unlike the type-only case this would have broken the moment
+      Jest tried to load the file, not stayed silently masked. Fixed to relative paths, route
+      fixed to `assets`, wired into `AssetModule`'s `controllers`. + `asset.controller.spec.ts`.
+      **Also, before this task**: extracted the `requireTenantId` private method — duplicated
+      identically across all six existing module controllers (vm/edr/siem/cti/soar/dfir) — into
+      a single shared `src/common/require-tenant-id.ts` function, and switched every controller
+      to import it instead of keeping its own copy, so `AssetController` didn't become a
+      seventh duplicate.
+- [x] `test/asset.e2e-spec.ts` — a route/RBAC block (mocked `AssetService`, matches the pattern
+      of every other module's first `describe` block) plus the full-chain integration test:
+      create a SOAR playbook and a matching CTI IOC, POST a real EDR event, then assert
+      `GET /assets/feed` returns all 5 resulting entries (the manually-added CTI IOC plus one
+      per chain hop: EDR detection, SIEM alert, SOAR execution, DFIR incident), all scoped to
+      the caller's tenant, in non-increasing timestamp order. One assertion had to be loosened
+      from the original plan text ("DFIR should be first") to a general non-increasing-order
+      check — the chain runs fast enough in-test that `SoarExecution.createdAt` and
+      `DfirIncident.createdAt` can tie at millisecond resolution, and a stable sort keeps
+      insertion order for ties rather than reordering them; not a bug in `getUnifiedFeed`, a
+      real property of millisecond-resolution timestamps under a fast synchronous test chain.
+      Second test confirms a non-matching IOC still lands EDR/SIEM entries without ever
+      reaching SOAR/DFIR. Stable across 3 consecutive full e2e runs. **Phase 7 complete —
+      287 unit / 128 e2e passing.**
 
 ## Phase 8 — Real-time delivery (SSE)
 

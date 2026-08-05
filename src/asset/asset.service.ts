@@ -6,7 +6,9 @@ import type {
   UnifiedEvent,
   SoarExecutionPayload,
   DfirIncidentPayload,
+  BaseQueryFilters,
 } from '../common/security-module/types';
+import type { AssetFeedEntry } from '../generated/prisma/client';
 
 @Injectable()
 export class AssetService {
@@ -107,6 +109,24 @@ export class AssetService {
         summary: payload.title,
         sourceId: payload.incidentId,
       },
+    });
+  }
+
+  async getUnifiedFeed(tenantId: string, filters: BaseQueryFilters): Promise<AssetFeedEntry[]> { 
+    return await this.prisma.assetFeedEntry.findMany({
+      orderBy: { timestamp: 'desc' },
+      where: {
+        tenantId,
+        ...(filters.severity && { severity: filters.severity }),
+        ...((filters.dateFrom || filters.dateTo) && {
+          timestamp: {
+            ...(filters.dateFrom && { gte: filters.dateFrom }),
+            ...(filters.dateTo && { lte: filters.dateTo }),
+          },
+        }),
+      },
+      skip: ((filters.page || 1) - 1) * (filters.pageSize || 20),
+      take: filters.pageSize || 20,
     });
   }
 }

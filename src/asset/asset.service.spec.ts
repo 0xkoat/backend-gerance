@@ -7,6 +7,7 @@ import { UnifiedEvent } from '../common/security-module/types';
 const mockPrismaService = {
   assetFeedEntry: {
     create: jest.fn(),
+    findMany: jest.fn(),
   },
 };
 
@@ -210,6 +211,69 @@ describe('AssetService', () => {
           sourceId: 'incident-1',
         },
       });
+    });
+  });
+
+  describe('getUnifiedFeed', () => {
+    const baseFilters = { tenantId: 'tenant-1' };
+
+    it('filters by tenantId only and applies default pagination, ordered by timestamp desc', async () => {
+      mockPrismaService.assetFeedEntry.findMany.mockResolvedValue([]);
+
+      await service.getUnifiedFeed('tenant-1', baseFilters);
+
+      expect(mockPrismaService.assetFeedEntry.findMany).toHaveBeenCalledWith({
+        orderBy: { timestamp: 'desc' },
+        where: { tenantId: 'tenant-1' },
+        skip: 0,
+        take: 20,
+      });
+    });
+
+    it('adds severity and a timestamp range to the where clause when provided', async () => {
+      mockPrismaService.assetFeedEntry.findMany.mockResolvedValue([]);
+      const dateFrom = new Date('2026-08-01');
+      const dateTo = new Date('2026-08-05');
+
+      await service.getUnifiedFeed('tenant-1', {
+        tenantId: 'tenant-1',
+        severity: Severity.CRITICAL,
+        dateFrom,
+        dateTo,
+      });
+
+      expect(mockPrismaService.assetFeedEntry.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            tenantId: 'tenant-1',
+            severity: Severity.CRITICAL,
+            timestamp: { gte: dateFrom, lte: dateTo },
+          },
+        }),
+      );
+    });
+
+    it('computes skip from the requested page and respects a custom pageSize', async () => {
+      mockPrismaService.assetFeedEntry.findMany.mockResolvedValue([]);
+
+      await service.getUnifiedFeed('tenant-1', {
+        tenantId: 'tenant-1',
+        page: 3,
+        pageSize: 10,
+      });
+
+      expect(mockPrismaService.assetFeedEntry.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ skip: 20, take: 10 }),
+      );
+    });
+
+    it('returns whatever the query resolves to', async () => {
+      const rows = [{ id: 'entry-1', tenantId: 'tenant-1' }];
+      mockPrismaService.assetFeedEntry.findMany.mockResolvedValue(rows);
+
+      const result = await service.getUnifiedFeed('tenant-1', baseFilters);
+
+      expect(result).toEqual(rows);
     });
   });
 });
