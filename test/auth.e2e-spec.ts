@@ -18,6 +18,8 @@ interface FakeUser {
   role: UserRole;
   tenantId: string | null;
   mustChangePassword: boolean;
+  failedLoginAttempts: number;
+  lockedUntil: Date | null;
 }
 
 interface FakeRefreshToken {
@@ -44,6 +46,8 @@ describe('Auth refresh/logout flow (e2e)', () => {
     role: UserRole.ANALYST,
     tenantId: 'tenant-1',
     mustChangePassword: false,
+    failedLoginAttempts: 0,
+    lockedUntil: null,
   };
 
   const usersByEmail: Record<string, FakeUser> = {
@@ -86,6 +90,23 @@ describe('Auth refresh/logout flow (e2e)', () => {
           Promise.resolve(
             usersById[id] ? { ...usersById[id], hashedPassword } : null,
           ),
+        ),
+      update: jest
+        .fn()
+        .mockImplementation(
+          ({
+            where: { id },
+            data,
+          }: {
+            where: { id: string };
+            data: Partial<FakeUser>;
+          }) => {
+            const user = usersById[id];
+            if (user) {
+              Object.assign(user, data);
+            }
+            return Promise.resolve(user ?? null);
+          },
         ),
     },
     refreshToken: {
@@ -171,6 +192,8 @@ describe('Auth refresh/logout flow (e2e)', () => {
     jest.clearAllMocks();
     refreshTokens = [];
     idCounter = 0;
+    analystUser.failedLoginAttempts = 0;
+    analystUser.lockedUntil = null;
     mockUsersService.findByEmail.mockImplementation((email: string) => {
       const user = usersByEmail[email];
       return Promise.resolve(user ? { ...user, hashedPassword } : null);
@@ -288,5 +311,61 @@ describe('Auth refresh/logout flow (e2e)', () => {
 
   it('rejects /auth/logout without a valid access token', async () => {
     await request(app.getHttpServer()).post('/api/auth/logout').expect(401);
+  });
+
+  describe('account lockout', () => {
+    it('locks the account after 5 wrong passwords and rejects even the correct one until unlocked', async () => {
+      for (let i = 0; i < 5; i++) {
+        const res = await request(app.getHttpServer())
+          .post('/api/auth/login')
+          .send({ email: analystUser.email, password: 'wrong-password' })
+          .expect(401);
+        expect((res.body as { message: string }).message).toBe(
+          'Invalid credentials',
+        );
+      }
+
+      expect(analystUser.failedLoginAttempts).toBe(5);
+      expect(analystUser.lockedUntil).not.toBeNull();
+
+      // Even the correct password is rejected while locked, with the exact
+      // same generic message — no "account locked" reveal.
+      const lockedRes = await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: analystUser.email, password: PASSWORD })
+        .expect(401);
+      expect((lockedRes.body as { message: string }).message).toBe(
+        'Invalid credentials',
+      );
+
+      // Simulate the 15-minute window having passed.
+      analystUser.lockedUntil = new Date(Date.now() - 1000);
+
+      await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: analystUser.email, password: PASSWORD })
+        .expect(200);
+
+      expect(analystUser.failedLoginAttempts).toBe(0);
+      expect(analystUser.lockedUntil).toBeNull();
+    });
+
+    it('does not extend the lockout when hammered further during the lockout window', async () => {
+      for (let i = 0; i < 5; i++) {
+        await request(app.getHttpServer())
+          .post('/api/auth/login')
+          .send({ email: analystUser.email, password: 'wrong-password' })
+          .expect(401);
+      }
+      const lockedUntilAfterFifth = analystUser.lockedUntil;
+
+      await request(app.getHttpServer())
+        .post('/api/auth/login')
+        .send({ email: analystUser.email, password: 'wrong-password' })
+        .expect(401);
+
+      expect(analystUser.failedLoginAttempts).toBe(5);
+      expect(analystUser.lockedUntil).toEqual(lockedUntilAfterFifth);
+    });
   });
 });

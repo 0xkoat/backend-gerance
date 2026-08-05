@@ -14,6 +14,9 @@ const DUMMY_HASH =
 
 const REFRESH_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+const LOCKOUT_THRESHOLD = 5;
+const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
+
 export interface TokenPair {
   accessToken: string;
   mustChangePassword: boolean;
@@ -31,6 +34,11 @@ export class AuthService {
     private readonly prisma: PrismaService,
   ) {}
 
+  // Locked-account rejections deliberately look identical to a wrong
+  // password (same message, same argon2.verify call run unconditionally
+  // beforehand) — this codebase already treats "does this email exist" as
+  // secret, and a distinct "account locked" response would both leak that
+  // and reopen the timing side-channel the dummy-hash verify exists to close.
   async validateUser(email: string, password: string): Promise<SafeUser> {
     const user = await this.usersService.findByEmail(email);
 
@@ -39,8 +47,24 @@ export class AuthService {
       password,
     );
 
-    if (!user || !isPasswordValid) {
+    const isLocked = !!user?.lockedUntil && user.lockedUntil > new Date();
+
+    if (!user || !isPasswordValid || isLocked) {
+      // Only a genuine wrong-password attempt against a currently-unlocked
+      // account counts — attempts made while already locked don't extend
+      // the lockout further, bounding it to a fixed 15-minute window no
+      // matter how many times it's hammered during that window.
+      if (user && !isLocked) {
+        await this.registerFailedLogin(user);
+      }
       throw new UnauthorizedException('Invalid credentials');
+    }
+
+    if (user.failedLoginAttempts > 0 || user.lockedUntil) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { failedLoginAttempts: 0, lockedUntil: null },
+      });
     }
 
     const { hashedPassword, ...userWithoutPassword } = user;
@@ -137,6 +161,20 @@ export class AuthService {
 
   async requestPasswordReset(email: string): Promise<void> {
     await this.usersService.requestPasswordReset(email);
+  }
+
+  private async registerFailedLogin(user: User): Promise<void> {
+    const attempts = user.failedLoginAttempts + 1;
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: {
+        failedLoginAttempts: attempts,
+        lockedUntil:
+          attempts >= LOCKOUT_THRESHOLD
+            ? new Date(Date.now() + LOCKOUT_DURATION_MS)
+            : user.lockedUntil,
+      },
+    });
   }
 
   private signAccessToken(user: SafeUser): string {

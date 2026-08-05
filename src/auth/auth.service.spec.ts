@@ -29,6 +29,7 @@ const mockJwtService = {
 const mockPrismaService = {
   user: {
     findUnique: jest.fn(),
+    update: jest.fn(),
   },
   refreshToken: {
     findUnique: jest.fn(),
@@ -70,6 +71,8 @@ describe('AuthService', () => {
       role: UserRole.ANALYST,
       tenantId: 'tenant-1',
       hashedPassword: 'hashed-password',
+      failedLoginAttempts: 0,
+      lockedUntil: null,
     };
 
     it('returns the user without the password hash when credentials are valid', async () => {
@@ -92,8 +95,11 @@ describe('AuthService', () => {
         phoneNumber: '+21612345678',
         role: UserRole.ANALYST,
         tenantId: 'tenant-1',
+        failedLoginAttempts: 0,
+        lockedUntil: null,
       });
       expect(result).not.toHaveProperty('hashedPassword');
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
     });
 
     it('throws UnauthorizedException when no user matches the email', async () => {
@@ -137,6 +143,92 @@ describe('AuthService', () => {
         service.validateUser('bob@x.com', 'wrong-password'),
       ).rejects.toThrow('Invalid credentials');
     });
+
+    describe('account lockout', () => {
+      it('increments failedLoginAttempts on a wrong password, without locking below the threshold', async () => {
+        mockUsersService.findByEmail.mockResolvedValue({
+          ...dbUser,
+          failedLoginAttempts: 2,
+        });
+        (argon2.verify as jest.Mock).mockResolvedValue(false);
+
+        await expect(
+          service.validateUser('bob@x.com', 'wrong-password'),
+        ).rejects.toThrow(UnauthorizedException);
+
+        expect(mockPrismaService.user.update).toHaveBeenCalledWith({
+          where: { id: '1' },
+          data: { failedLoginAttempts: 3, lockedUntil: null },
+        });
+      });
+
+      it('locks the account once the 5th consecutive failure is reached', async () => {
+        mockUsersService.findByEmail.mockResolvedValue({
+          ...dbUser,
+          failedLoginAttempts: 4,
+        });
+        (argon2.verify as jest.Mock).mockResolvedValue(false);
+
+        await expect(
+          service.validateUser('bob@x.com', 'wrong-password'),
+        ).rejects.toThrow(UnauthorizedException);
+
+        expect(mockPrismaService.user.update).toHaveBeenCalledWith({
+          where: { id: '1' },
+          data: { failedLoginAttempts: 5, lockedUntil: expect.any(Date) },
+        });
+      });
+
+      it('rejects a correct password while the account is locked, without touching the counters', async () => {
+        mockUsersService.findByEmail.mockResolvedValue({
+          ...dbUser,
+          failedLoginAttempts: 5,
+          lockedUntil: new Date(Date.now() + 10 * 60 * 1000),
+        });
+        (argon2.verify as jest.Mock).mockResolvedValue(true);
+
+        await expect(
+          service.validateUser('bob@x.com', 'correct-password'),
+        ).rejects.toThrow(UnauthorizedException);
+
+        expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+      });
+
+      it('does not extend the lockout when a wrong password is retried during the lockout window', async () => {
+        mockUsersService.findByEmail.mockResolvedValue({
+          ...dbUser,
+          failedLoginAttempts: 5,
+          lockedUntil: new Date(Date.now() + 10 * 60 * 1000),
+        });
+        (argon2.verify as jest.Mock).mockResolvedValue(false);
+
+        await expect(
+          service.validateUser('bob@x.com', 'wrong-password'),
+        ).rejects.toThrow(UnauthorizedException);
+
+        expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+      });
+
+      it('allows login again and clears both counters once lockedUntil has passed', async () => {
+        mockUsersService.findByEmail.mockResolvedValue({
+          ...dbUser,
+          failedLoginAttempts: 5,
+          lockedUntil: new Date(Date.now() - 1000),
+        });
+        (argon2.verify as jest.Mock).mockResolvedValue(true);
+
+        const result = await service.validateUser(
+          'bob@x.com',
+          'correct-password',
+        );
+
+        expect(result.id).toBe('1');
+        expect(mockPrismaService.user.update).toHaveBeenCalledWith({
+          where: { id: '1' },
+          data: { failedLoginAttempts: 0, lockedUntil: null },
+        });
+      });
+    });
   });
 
   describe('login', () => {
@@ -149,6 +241,8 @@ describe('AuthService', () => {
       tenantId: 'tenant-1',
       mustChangePassword: false,
       passwordResetRequestedAt: null,
+      failedLoginAttempts: 0,
+      lockedUntil: null,
       updatedAt: new Date(),
       createdAt: new Date(),
     };

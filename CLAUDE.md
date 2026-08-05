@@ -258,10 +258,61 @@ hour without re-entering credentials.
   Postgres with a real seeded Admin account — confirmed the cookie's actual `Set-Cookie`
   attributes, the family-kill behavior on replay, and that logout without a valid access
   token is rejected.
-- **Deliberately not built here**: a "logout everywhere" endpoint (see above), and
-  machine-to-machine auth (API keys) for the `POST /<module>/events` ingestion routes —
-  a related but separate gap, still gated behind `@Roles(ADMIN)` as a stand-in per decision
-  7 in the module implementation plan below.
+- **Deliberately not built here**: a "logout everywhere" endpoint (see above). Related but
+  separate gap — machine-to-machine auth (API keys) for the ingestion routes — is tracked at
+  decision 7 in the module implementation plan below, not here.
+
+# Auth: account lockout & password reuse prevention (added 2026-08-05)
+
+Closes the last real, buildable-now backend gap identified in a completeness review (real
+vendor integration and the ingestion API-key work are excluded from that review — both are
+blocked on external access that doesn't exist yet, not backend effort).
+
+- **Lockout uses plain counter fields on `User`** (`failedLoginAttempts Int @default(0)`,
+  `lockedUntil DateTime?`), not a dedicated table — unlike `RefreshToken`/`PasswordHistory`,
+  this is current state, not a history that needs replaying or reuse-detection.
+- **5 consecutive failed attempts locks the account for 15 minutes**, reset by any
+  successful login. Attempts made *during* an active lockout — whether the password is
+  right or wrong — don't extend `lockedUntil` further, bounding the lockout to a fixed
+  window no matter how much it's hammered (an unbounded-extension design would let anyone
+  who knows a valid email keep that account locked out indefinitely). One real consequence
+  worth knowing: since only a *successful* login resets the counter (not the passage of
+  time), the very next failure after a lock naturally expires re-locks the account
+  immediately — the counter doesn't quietly reset itself just because the timer ran out. If
+  that turns out to be too strict in practice, the fix is treating a naturally-expired lock
+  as a fresh count starting at 1 rather than incrementing the stale 5.
+- **Locked-account responses are identical to a wrong password** — same message, same
+  `argon2.verify` call still run unconditionally beforehand. This follows the same
+  no-enumeration principle behind the dummy-hash timing fix already in this file: a distinct
+  "account locked" response would leak that the email exists and reopen a timing
+  side-channel. Trade-off: a legitimately-locked-out user gets no explicit signal that
+  they're locked, just the same generic rejection every time.
+  Live-verified against the real dev server: 5 real wrong-password requests against a
+  seeded Admin set `failedLoginAttempts: 5` and a future `lockedUntil` in Postgres; the
+  correct password was then rejected with the identical `"Invalid credentials"` body while
+  still locked; fast-forwarding `lockedUntil` into the past (simulating the window elapsing)
+  let the same correct password succeed and reset both fields to `0`/`null`.
+- **`PasswordHistory` is a dedicated, append-only table** (`userId, hashedPassword,
+  createdAt`) — never pruned, since a permanent record of when an account's password
+  changed is cheap and useful for later investigation. Only the reuse *check* is bounded: a
+  new password is checked via `argon2.verify` (not equality — salts are random) against the
+  current hash plus the 4 most recent history rows, i.e. "can't reuse your last 5
+  passwords." Applies to both places a password gets set on an existing account —
+  `UsersService.changePassword` (self, forced-change) and `resetPasswordForTenant`/
+  `resetSoleAdminPassword` (Admin/Super Admin resetting someone else) — via a shared
+  `applyPasswordReset` choke point. Does *not* apply to `createUser`/`createTenantWithAdmin`,
+  since a brand-new account has no prior password to reuse.
+  Live-verified: resetting a seeded Analyst's password, then immediately resetting it again
+  to the exact same value, returned `409 New password must not match your current or last 5
+  passwords`; resetting to a genuinely different value succeeded, and both changes left a
+  row in `PasswordHistory`.
+- **An Admin/Super Admin resetting a password also clears any existing lockout**
+  (`failedLoginAttempts: 0, lockedUntil: null`) in the same `applyPasswordReset` write —
+  otherwise a locked-out account that was just fixed by an Admin would stay artificially
+  locked for whatever remained of the 15-minute window.
+- Verified three ways: full unit + e2e suites (340 unit / 137 e2e passing, including new
+  lockout and reuse-rejection cases in `test/auth.e2e-spec.ts` and `test/users.e2e-spec.ts`),
+  and live against the real dev server + Postgres as described above.
 
 # API surface & operational hardening
 
@@ -359,6 +410,26 @@ polling-ingestion skeleton come after all six modules exist, since they all read
    tenant user's JWT — it needs its own auth (API key, mTLS, etc.). Designing that is a separate,
    deliberate decision, not something to improvise as a side effect of building these routes;
    flagged here so it isn't forgotten, not solved in this plan.
+
+   **Tracked gap, parked 2026-08-05 — not scheduled, revisit only when a real
+   machine caller exists.** Designed but deliberately not built, once the actual shape became
+   clear: an `ApiKey` model (`tenantId, moduleName, keyHash, keyPrefix, lastUsedAt, revokedAt`,
+   SHA-256 hashed same reasoning as `RefreshToken`) plus a guard accepting `X-API-Key` on these
+   four routes as an alternative to a human JWT. The complexity that argued against building it
+   now: it's not a route-level addition — `JwtAuthGuard`/`RolesGuard`/`MustChangePasswordGuard`
+   are all global (`APP_GUARD` in `app.module.ts`), so a second credential type means teaching
+   the guard chain every route depends on to recognize it (`JwtAuthGuard` would need a new
+   `@AllowApiKey(ModuleName.X)` decorator, `RolesGuard` would need to skip `@Roles(ADMIN)` for
+   a synthetic api-key-authenticated request without loosening it for real JWTs) — real blast
+   radius on the app's highest-traffic security surface, for a caller that, like the real vendor
+   integrations themselves, doesn't exist yet. Two options when this is picked back up:
+   - **Preferred if/when built**: a separate `POST /ingest/<module>` namespace gated only by a
+     standalone `ApiKeyGuard` (`@Public()` from `JwtAuthGuard`'s perspective, since the key fully
+     replaces JWT auth), calling the same `<Module>Service.ingest()`. Zero risk to the existing
+     global guard chain, at the cost of two URLs reaching the same ingestion logic.
+   - Full integration into the existing `POST /<module>/events` routes (the `@AllowApiKey`
+     decorator approach above) — cleaner surface, more invasive, only worth the risk once a real
+     caller's needs (e.g. it must be the *same* URL a vendor's webhook config expects) demand it.
 8. **SOAR "execution" is fully simulated for MVP** — `SoarExecution` rows are created and
    immediately marked `SUCCESS` with a logged message; there is no real automation engine to call
    (per root `CLAUDE.md`: the backend integrates external engines, it doesn't reimplement them,

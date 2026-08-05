@@ -21,6 +21,8 @@ describe('AppController (e2e)', () => {
     tenantId: 'tenant-1',
     hashedPassword: '',
     mustChangePassword: false,
+    failedLoginAttempts: 0,
+    lockedUntil: null,
   };
 
   const mockUsersService = {
@@ -44,7 +46,10 @@ describe('AppController (e2e)', () => {
       .useValue({
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
-        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
+        refreshToken: {
+          create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+        },
+        user: { update: jest.fn().mockResolvedValue({}) },
       })
       .compile();
 

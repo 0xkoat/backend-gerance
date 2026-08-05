@@ -25,6 +25,10 @@ const mockPrismaService = {
     delete: jest.fn(),
     count: jest.fn(),
   },
+  passwordHistory: {
+    findMany: jest.fn(),
+    create: jest.fn(),
+  },
   $transaction: jest.fn(),
 };
 
@@ -451,16 +455,23 @@ describe('UsersService', () => {
 
     it('verifies the current password, hashes the new one, and updates it', async () => {
       mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
-      (argon2.verify as jest.Mock).mockResolvedValue(true);
+      mockPrismaService.passwordHistory.findMany.mockResolvedValue([]);
+      (argon2.verify as jest.Mock)
+        .mockResolvedValueOnce(true) // current-password check
+        .mockResolvedValueOnce(false); // reuse check against the current hash
       (argon2.hash as jest.Mock).mockResolvedValue('new-hashed-password');
 
       await service.changePassword('1', 'old-password', 'New-password1!');
 
-      expect(argon2.verify).toHaveBeenCalledWith(
+      expect(argon2.verify).toHaveBeenNthCalledWith(
+        1,
         'old-hashed-password',
         'old-password',
       );
       expect(argon2.hash).toHaveBeenCalledWith('New-password1!');
+      expect(mockPrismaService.passwordHistory.create).toHaveBeenCalledWith({
+        data: { userId: '1', hashedPassword: 'old-hashed-password' },
+      });
       expect(mockPrismaService.user.update).toHaveBeenCalledWith({
         where: { id: '1' },
         data: {
@@ -468,6 +479,43 @@ describe('UsersService', () => {
           mustChangePassword: false,
         },
       });
+    });
+
+    it('rejects when the new password matches the current one', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
+      (argon2.verify as jest.Mock)
+        .mockResolvedValueOnce(true) // current-password check
+        .mockResolvedValueOnce(true); // reuse check: same as current
+      (argon2.hash as jest.Mock).mockResolvedValue('new-hashed-password');
+
+      await expect(
+        service.changePassword('1', 'old-password', 'old-password'),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+      expect(mockPrismaService.passwordHistory.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects when the new password matches one of the last 4 historical passwords', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
+      mockPrismaService.passwordHistory.findMany.mockResolvedValue([
+        { hashedPassword: 'hist-1' },
+        { hashedPassword: 'hist-2' },
+      ]);
+      (argon2.verify as jest.Mock)
+        .mockResolvedValueOnce(true) // current-password check
+        .mockResolvedValueOnce(false) // reuse check vs current hash: no match
+        .mockResolvedValueOnce(false) // vs hist-1: no match
+        .mockResolvedValueOnce(true); // vs hist-2: match
+
+      await expect(
+        service.changePassword('1', 'old-password', 'a-reused-password'),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.passwordHistory.findMany).toHaveBeenCalledWith({
+        where: { userId: '1' },
+        orderBy: { createdAt: 'desc' },
+        take: 4,
+      });
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
     });
 
     it('throws UnauthorizedException when the current password is wrong', async () => {
@@ -642,21 +690,48 @@ describe('UsersService', () => {
 
   describe('resetPasswordForTenant', () => {
     it('hashes the new password, sets mustChangePassword, and clears the pending request', async () => {
-      const existingUser = { id: '1', tenantId: 'tenant-1' };
+      const existingUser = {
+        id: '1',
+        tenantId: 'tenant-1',
+        hashedPassword: 'old-hashed-password',
+      };
       mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
+      mockPrismaService.passwordHistory.findMany.mockResolvedValue([]);
+      (argon2.verify as jest.Mock).mockResolvedValue(false);
       (argon2.hash as jest.Mock).mockResolvedValue('new-hashed-password');
 
       await service.resetPasswordForTenant('1', 'tenant-1', 'New-password1!');
 
       expect(argon2.hash).toHaveBeenCalledWith('New-password1!');
+      expect(mockPrismaService.passwordHistory.create).toHaveBeenCalledWith({
+        data: { userId: '1', hashedPassword: 'old-hashed-password' },
+      });
       expect(mockPrismaService.user.update).toHaveBeenCalledWith({
         where: { id: '1' },
         data: {
           hashedPassword: 'new-hashed-password',
           mustChangePassword: true,
           passwordResetRequestedAt: null,
+          failedLoginAttempts: 0,
+          lockedUntil: null,
         },
       });
+    });
+
+    it('rejects when the new password matches one the target has used before', async () => {
+      const existingUser = {
+        id: '1',
+        tenantId: 'tenant-1',
+        hashedPassword: 'old-hashed-password',
+      };
+      mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
+      mockPrismaService.passwordHistory.findMany.mockResolvedValue([]);
+      (argon2.verify as jest.Mock).mockResolvedValue(true);
+
+      await expect(
+        service.resetPasswordForTenant('1', 'tenant-1', 'Old-password1!'),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
     });
 
     it('throws NotFoundException when the user does not exist', async () => {
@@ -690,11 +765,14 @@ describe('UsersService', () => {
       id: 'admin-1',
       role: UserRole.ADMIN,
       tenantId: 'tenant-1',
+      hashedPassword: 'old-hashed-password',
     };
 
     it("resets the password when the target is the tenant's only Admin", async () => {
       mockPrismaService.user.findUnique.mockResolvedValue(soleAdmin);
       mockPrismaService.user.count.mockResolvedValue(1);
+      mockPrismaService.passwordHistory.findMany.mockResolvedValue([]);
+      (argon2.verify as jest.Mock).mockResolvedValue(false);
       (argon2.hash as jest.Mock).mockResolvedValue('new-hashed-password');
 
       await service.resetSoleAdminPassword('admin-1', 'New-password1!');
@@ -702,14 +780,42 @@ describe('UsersService', () => {
       expect(mockPrismaService.user.count).toHaveBeenCalledWith({
         where: { tenantId: 'tenant-1', role: UserRole.ADMIN },
       });
+      expect(mockPrismaService.passwordHistory.create).toHaveBeenCalledWith({
+        data: { userId: 'admin-1', hashedPassword: 'old-hashed-password' },
+      });
       expect(mockPrismaService.user.update).toHaveBeenCalledWith({
         where: { id: 'admin-1' },
         data: {
           hashedPassword: 'new-hashed-password',
           mustChangePassword: true,
           passwordResetRequestedAt: null,
+          failedLoginAttempts: 0,
+          lockedUntil: null,
         },
       });
+    });
+
+    it('clears a pre-existing lockout as part of the reset', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        ...soleAdmin,
+        failedLoginAttempts: 5,
+        lockedUntil: new Date(Date.now() + 10 * 60 * 1000),
+      });
+      mockPrismaService.user.count.mockResolvedValue(1);
+      mockPrismaService.passwordHistory.findMany.mockResolvedValue([]);
+      (argon2.verify as jest.Mock).mockResolvedValue(false);
+      (argon2.hash as jest.Mock).mockResolvedValue('new-hashed-password');
+
+      await service.resetSoleAdminPassword('admin-1', 'New-password1!');
+
+      expect(mockPrismaService.user.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            failedLoginAttempts: 0,
+            lockedUntil: null,
+          }),
+        }),
+      );
     });
 
     it('rejects when the tenant has a co-Admin who could handle it instead', async () => {
