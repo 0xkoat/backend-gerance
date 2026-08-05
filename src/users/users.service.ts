@@ -12,6 +12,10 @@ import { CreateUserDto } from './dto/createUser.dto';
 import { UpdateUserDto } from './dto/updateUser.dto';
 import * as argon2 from 'argon2';
 
+// Checked against the current password plus this many prior ones — "last 5
+// passwords" total, including the one about to be replaced.
+const PASSWORD_HISTORY_CHECK_LIMIT = 4;
+
 @Injectable()
 export class UsersService {
   private readonly logger = new Logger(UsersService.name);
@@ -173,7 +177,14 @@ export class UsersService {
       throw new UnauthorizedException('Current password is incorrect');
     }
 
+    await this.assertPasswordNotReused(
+      userId,
+      user.hashedPassword,
+      newPassword,
+    );
+
     const hashedPassword = await argon2.hash(newPassword);
+    await this.recordPasswordHistory(userId, user.hashedPassword);
 
     return this.prisma.user.update({
       where: { id: userId },
@@ -264,8 +275,8 @@ export class UsersService {
     tenantId: string,
     newPassword: string,
   ): Promise<void> {
-    await this.findByIdForTenant(id, tenantId);
-    await this.applyPasswordReset(id, newPassword);
+    const user = await this.findByIdForTenant(id, tenantId);
+    await this.applyPasswordReset(id, user.hashedPassword, newPassword);
   }
 
   // Escalation path for a tenant with no co-Admin to handle the reset themselves: a Super
@@ -290,14 +301,18 @@ export class UsersService {
       );
     }
 
-    await this.applyPasswordReset(id, newPassword);
+    await this.applyPasswordReset(id, target.hashedPassword, newPassword);
   }
 
   private async applyPasswordReset(
     id: string,
+    currentHashedPassword: string,
     newPassword: string,
   ): Promise<void> {
+    await this.assertPasswordNotReused(id, currentHashedPassword, newPassword);
+
     const hashedPassword = await argon2.hash(newPassword);
+    await this.recordPasswordHistory(id, currentHashedPassword);
 
     await this.prisma.user.update({
       where: { id },
@@ -305,7 +320,61 @@ export class UsersService {
         hashedPassword,
         mustChangePassword: true,
         passwordResetRequestedAt: null,
+        // An Admin/Super Admin actively resetting this password is already
+        // the fix for a locked-out account — leaving the lock in place for
+        // the rest of the window would just re-lock them out of the account
+        // that was just repaired.
+        failedLoginAttempts: 0,
+        lockedUntil: null,
       },
+    });
+  }
+
+  // Checked against the current password plus the last PASSWORD_HISTORY_CHECK_LIMIT
+  // historical ones — argon2.verify, not equality, since argon2 salts are random.
+  private async assertPasswordNotReused(
+    userId: string,
+    currentHashedPassword: string,
+    newPassword: string,
+  ): Promise<void> {
+    const matchesCurrent = await argon2.verify(
+      currentHashedPassword,
+      newPassword,
+    );
+    if (matchesCurrent) {
+      throw new ConflictException(
+        'New password must not match your current or last 5 passwords',
+      );
+    }
+
+    const history = await this.prisma.passwordHistory.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: PASSWORD_HISTORY_CHECK_LIMIT,
+    });
+
+    for (const entry of history) {
+      const matchesHistorical = await argon2.verify(
+        entry.hashedPassword,
+        newPassword,
+      );
+      if (matchesHistorical) {
+        throw new ConflictException(
+          'New password must not match your current or last 5 passwords',
+        );
+      }
+    }
+  }
+
+  // Never pruned — a permanent audit trail of when this account's password
+  // changed is cheap to keep and useful for later investigation. Only the
+  // reuse *check* above is bounded to the most recent entries.
+  private async recordPasswordHistory(
+    userId: string,
+    hashedPassword: string,
+  ): Promise<void> {
+    await this.prisma.passwordHistory.create({
+      data: { userId, hashedPassword },
     });
   }
 }

@@ -129,7 +129,9 @@ describe('UsersController (e2e)', () => {
       .useValue({
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
-        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
+        refreshToken: {
+          create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+        },
       })
       .compile();
 
@@ -564,6 +566,21 @@ describe('UsersController (e2e)', () => {
       expect(mockUsersService.changePassword).not.toHaveBeenCalled();
     });
 
+    it('returns 409 when the new password reuses a recent one', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.changePassword.mockRejectedValue(
+        new ConflictException(
+          'New password must not match your current or last 5 passwords',
+        ),
+      );
+
+      await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: PASSWORD, newPassword: 'Old-password1!' })
+        .expect(409);
+    });
+
     it('rejects a request with no token', () => {
       return request(app.getHttpServer())
         .patch('/api/users/me/password')
@@ -626,6 +643,21 @@ describe('UsersController (e2e)', () => {
         .set('Authorization', `Bearer ${token}`)
         .send({ newPassword: 'New-password1!' })
         .expect(403);
+    });
+
+    it('returns 409 when the new password reuses one the target has used before', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.resetPasswordForTenant.mockRejectedValue(
+        new ConflictException(
+          'New password must not match your current or last 5 passwords',
+        ),
+      );
+
+      await request(app.getHttpServer())
+        .post(`/api/users/${analystUser.id}/reset-password`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ newPassword: 'Old-password1!' })
+        .expect(409);
     });
 
     it('rejects an Admin targeting their own account, without calling the service', async () => {
