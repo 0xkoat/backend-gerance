@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SiemService, SiemQueryFilters } from './siem.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -261,14 +261,21 @@ describe('SiemService', () => {
       });
     });
 
-    it('returns down when the database query fails', async () => {
-      mockPrismaService.siemAlert.findFirst.mockRejectedValue(
-        new Error('connection lost'),
-      );
+    it('returns down and logs the error when the database query fails', async () => {
+      const errorSpy = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation();
+      const dbError = new Error('connection lost');
+      mockPrismaService.siemAlert.findFirst.mockRejectedValue(dbError);
 
       const result = await service.healthCheck();
 
       expect(result).toEqual({ module: ModuleName.SIEM, status: 'down' });
+      expect(errorSpy).toHaveBeenCalledWith(
+        'SIEM health check failed',
+        dbError,
+      );
+      errorSpy.mockRestore();
     });
   });
 

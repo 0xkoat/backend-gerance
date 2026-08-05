@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import {
   ConflictException,
   ForbiddenException,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -107,10 +108,7 @@ describe('UsersService', () => {
   describe('findAllForTenant', () => {
     it('returns a page of users scoped to the given tenant, plus the total count', async () => {
       const users = [{ id: '1', tenantId: 'tenant-1' }];
-      (mockPrismaService.$transaction as jest.Mock).mockResolvedValue([
-        users,
-        1,
-      ]);
+      mockPrismaService.$transaction.mockResolvedValue([users, 1]);
 
       const result = await service.findAllForTenant('tenant-1', 1, 20);
 
@@ -127,7 +125,7 @@ describe('UsersService', () => {
     });
 
     it('computes skip from the requested page', async () => {
-      (mockPrismaService.$transaction as jest.Mock).mockResolvedValue([[], 45]);
+      mockPrismaService.$transaction.mockResolvedValue([[], 45]);
 
       await service.findAllForTenant('tenant-1', 3, 20);
 
@@ -137,7 +135,7 @@ describe('UsersService', () => {
     });
 
     it('returns an empty page when the tenant has no users', async () => {
-      (mockPrismaService.$transaction as jest.Mock).mockResolvedValue([[], 0]);
+      mockPrismaService.$transaction.mockResolvedValue([[], 0]);
 
       const result = await service.findAllForTenant('empty-tenant', 1, 20);
 
@@ -211,7 +209,8 @@ describe('UsersService', () => {
       );
     });
 
-    it('throws ConflictException when the email already exists (Prisma P2002)', async () => {
+    it('throws ConflictException and logs a warning when the email already exists (Prisma P2002)', async () => {
+      const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
       mockPrismaService.user.create.mockRejectedValue(
         prismaKnownError('P2002'),
       );
@@ -219,6 +218,8 @@ describe('UsersService', () => {
       await expect(
         service.createUser(dto, UserRole.VIEWER, 'tenant-1'),
       ).rejects.toThrow(ConflictException);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(dto.email));
+      warnSpy.mockRestore();
     });
 
     it('rethrows unrelated errors instead of swallowing them', async () => {
@@ -270,7 +271,8 @@ describe('UsersService', () => {
       expect(mockPrismaService.user.update).not.toHaveBeenCalled();
     });
 
-    it('throws ConflictException when the new email collides with another user (Prisma P2002)', async () => {
+    it('throws ConflictException and logs a warning when the new email collides with another user (Prisma P2002)', async () => {
+      const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
       mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
       mockPrismaService.user.update.mockRejectedValue(
         prismaKnownError('P2002'),
@@ -279,6 +281,8 @@ describe('UsersService', () => {
       await expect(
         service.updateUserForTenant('1', 'tenant-1', { email: 'taken@x.com' }),
       ).rejects.toThrow(ConflictException);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('1'));
+      warnSpy.mockRestore();
     });
 
     it('rethrows unrelated errors instead of swallowing them', async () => {

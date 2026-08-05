@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import {
   Prisma,
@@ -30,6 +30,8 @@ export class SoarService implements SecurityModule<
   SoarExecution,
   SoarQueryFilters
 > {
+  private readonly logger = new Logger(SoarService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
@@ -141,7 +143,8 @@ export class SoarService implements SecurityModule<
         status: 'ok',
         lastIngestion: latest?.createdAt,
       };
-    } catch {
+    } catch (error) {
+      this.logger.error('SOAR health check failed', error);
       return { module: ModuleName.SOAR, status: 'down' };
     }
   }

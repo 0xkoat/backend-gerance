@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Prisma, SiemAlert, SiemLog } from '../generated/prisma/client';
 import {
@@ -28,6 +28,8 @@ export class SiemService implements SecurityModule<
   SiemAlert,
   SiemQueryFilters
 > {
+  private readonly logger = new Logger(SiemService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
@@ -134,7 +136,8 @@ export class SiemService implements SecurityModule<
         status: 'ok',
         lastIngestion: latest?.createdAt,
       };
-    } catch {
+    } catch (error) {
+      this.logger.error('SIEM health check failed', error);
       return { module: ModuleName.SIEM, status: 'down' };
     }
   }

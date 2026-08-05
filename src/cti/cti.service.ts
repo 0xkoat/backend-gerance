@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Prisma, CtiIoc } from '../generated/prisma/client';
 import { CtiIocType, ModuleName, Severity } from '../generated/prisma/enums';
@@ -18,6 +18,8 @@ const MATCH_ESCALATION_SEVERITY = Severity.CRITICAL;
 
 @Injectable()
 export class CtiService implements SecurityModule<CtiIoc, CtiQueryFilters> {
+  private readonly logger = new Logger(CtiService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
@@ -129,7 +131,8 @@ export class CtiService implements SecurityModule<CtiIoc, CtiQueryFilters> {
         status: 'ok',
         lastIngestion: latest?.createdAt,
       };
-    } catch {
+    } catch (error) {
+      this.logger.error('CTI health check failed', error);
       return { module: ModuleName.CTI, status: 'down' };
     }
   }

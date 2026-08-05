@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EdrService, EdrQueryFilters } from './edr.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -208,14 +209,18 @@ describe('EdrService', () => {
       });
     });
 
-    it('returns down when the database query fails', async () => {
-      mockPrismaService.edrDetection.findFirst.mockRejectedValue(
-        new Error('connection lost'),
-      );
+    it('returns down and logs the error when the database query fails', async () => {
+      const errorSpy = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation();
+      const dbError = new Error('connection lost');
+      mockPrismaService.edrDetection.findFirst.mockRejectedValue(dbError);
 
       const result = await service.healthCheck();
 
       expect(result).toEqual({ module: ModuleName.EDR, status: 'down' });
+      expect(errorSpy).toHaveBeenCalledWith('EDR health check failed', dbError);
+      errorSpy.mockRestore();
     });
   });
 

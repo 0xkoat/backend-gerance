@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { VmService, VmQueryFilters } from './vm.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -223,14 +223,18 @@ describe('VmService', () => {
       });
     });
 
-    it('returns down when the database query fails', async () => {
-      mockPrismaService.vmVulnerability.findFirst.mockRejectedValue(
-        new Error('connection lost'),
-      );
+    it('returns down and logs the error when the database query fails', async () => {
+      const errorSpy = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation();
+      const dbError = new Error('connection lost');
+      mockPrismaService.vmVulnerability.findFirst.mockRejectedValue(dbError);
 
       const result = await service.healthCheck();
 
       expect(result).toEqual({ module: ModuleName.VM, status: 'down' });
+      expect(errorSpy).toHaveBeenCalledWith('VM health check failed', dbError);
+      errorSpy.mockRestore();
     });
   });
 

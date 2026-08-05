@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, VmVulnerability, VmAsset } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -20,6 +20,8 @@ export class VmService implements SecurityModule<
   VmVulnerability,
   VmQueryFilters
 > {
+  private readonly logger = new Logger(VmService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
@@ -106,7 +108,8 @@ export class VmService implements SecurityModule<
         status: 'ok',
         lastIngestion: latest?.createdAt,
       };
-    } catch {
+    } catch (error) {
+      this.logger.error('VM health check failed', error);
       return { module: ModuleName.VM, status: 'down' };
     }
   }
