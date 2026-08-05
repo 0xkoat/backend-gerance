@@ -1,11 +1,4 @@
-import {
-  Controller,
-  Get,
-  ForbiddenException,
-  Post,
-  Body,
-  Query,
-} from '@nestjs/common';
+import { Controller, Get, Post, Body, Query } from '@nestjs/common';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/jwt.strategy';
@@ -14,17 +7,11 @@ import { CtiService } from './cti.service';
 import { CreateCtiIocDto } from './dto/createCtiIoc.dto';
 import { CtiQueryDto } from './dto/ctiQuery.dto';
 import type { UnifiedEvent } from '../common/security-module/types';
+import { requireTenantId } from '../common/require-tenant-id';
 
 @Controller('cti')
 export class CtiController {
   constructor(private readonly ctiService: CtiService) {}
-
-  private requireTenantId(user: AuthenticatedUser): string {
-    if (!user.tenantId) {
-      throw new ForbiddenException('This account is not scoped to a tenant');
-    }
-    return user.tenantId;
-  }
 
   private buildIocEvent(tenantId: string, dto: CreateCtiIocDto): UnifiedEvent {
     return {
@@ -47,7 +34,7 @@ export class CtiController {
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: CtiQueryDto,
   ) {
-    const tenantId = this.requireTenantId(user);
+    const tenantId = requireTenantId(user);
     return this.ctiService.query({ ...query, tenantId });
   }
 
@@ -57,7 +44,7 @@ export class CtiController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() createCtiIocDto: CreateCtiIocDto,
   ) {
-    const tenantId = this.requireTenantId(user);
+    const tenantId = requireTenantId(user);
     return this.ctiService.ingest(
       this.buildIocEvent(tenantId, createCtiIocDto),
     );
@@ -69,7 +56,7 @@ export class CtiController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() createCtiIocDto: CreateCtiIocDto,
   ) {
-    const tenantId = this.requireTenantId(user);
+    const tenantId = requireTenantId(user);
     return this.ctiService.ingest(
       this.buildIocEvent(tenantId, createCtiIocDto),
     );

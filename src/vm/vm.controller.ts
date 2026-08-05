@@ -1,7 +1,6 @@
 import {
   Controller,
   Get,
-  ForbiddenException,
   Post,
   Body,
   Param,
@@ -18,21 +17,15 @@ import type { AuthenticatedUser } from '../auth/jwt.strategy';
 import { UserRole, ModuleName } from '../generated/prisma/enums';
 import { VmService } from './vm.service';
 import { UnifiedEvent } from '../common/security-module/types';
+import { requireTenantId } from '../common/require-tenant-id';
 
 @Controller('vm')
 export class VmController {
   constructor(private readonly vmService: VmService) {}
 
-  private requireTenantId(user: AuthenticatedUser): string {
-    if (!user.tenantId) {
-      throw new ForbiddenException('This account is not scoped to a tenant');
-    }
-    return user.tenantId;
-  }
-
   @Get('assets')
   async listAssets(@CurrentUser() user: AuthenticatedUser) {
-    const tenantId = this.requireTenantId(user);
+    const tenantId = requireTenantId(user);
     return this.vmService.listAssets(tenantId);
   }
 
@@ -42,7 +35,7 @@ export class VmController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() createVmAssetDto: CreateVmAssetDto,
   ) {
-    const tenantId = this.requireTenantId(user);
+    const tenantId = requireTenantId(user);
     return this.vmService.createAsset(tenantId, createVmAssetDto);
   }
 
@@ -51,7 +44,7 @@ export class VmController {
     @CurrentUser() user: AuthenticatedUser,
     @Query() query: VmQueryDto,
   ) {
-    const tenantId = this.requireTenantId(user);
+    const tenantId = requireTenantId(user);
     return this.vmService.query({ ...query, tenantId });
   }
 
@@ -62,7 +55,7 @@ export class VmController {
     @Param('id') id: string,
     @Body() updateVulnerabilityStatusDto: UpdateVulnerabilityStatusDto,
   ) {
-    const tenantId = this.requireTenantId(user);
+    const tenantId = requireTenantId(user);
     return this.vmService.updateVulnerabilityStatus(
       tenantId,
       id,
@@ -76,7 +69,7 @@ export class VmController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() ingestVmEventDto: IngestVmEventDto,
   ) {
-    const tenantId = this.requireTenantId(user);
+    const tenantId = requireTenantId(user);
     const unifiedEvent: UnifiedEvent = {
       tenantId,
       timestamp: new Date(),
