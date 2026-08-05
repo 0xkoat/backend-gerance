@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { VmService, VmQueryFilters } from './vm.service';
 import { PrismaService } from '../prisma/prisma.service';
 import {
@@ -24,6 +25,10 @@ const mockPrismaService = {
   },
 };
 
+const mockEventEmitter = {
+  emit: jest.fn(),
+};
+
 describe('VmService', () => {
   let service: VmService;
 
@@ -34,6 +39,7 @@ describe('VmService', () => {
       providers: [
         VmService,
         { provide: PrismaService, useValue: mockPrismaService },
+        { provide: EventEmitter2, useValue: mockEventEmitter },
       ],
     }).compile();
 
@@ -105,6 +111,20 @@ describe('VmService', () => {
         expect.objectContaining({
           data: expect.objectContaining({ assetId: 'existing-asset' }),
         }),
+      );
+    });
+
+    it('emits vm.vulnerability.created with the created vulnerability id added to data', async () => {
+      mockPrismaService.vmAsset.upsert.mockResolvedValue({ id: 'asset-1' });
+      mockPrismaService.vmVulnerability.create.mockResolvedValue({
+        id: 'vuln-1',
+      });
+
+      await service.ingest(event);
+
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+        'vm.vulnerability.created',
+        { ...event, data: { ...event.data, vulnerabilityId: 'vuln-1' } },
       );
     });
   });

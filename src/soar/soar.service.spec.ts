@@ -58,8 +58,10 @@ describe('SoarService', () => {
           triggerCondition: { severity: 'CRITICAL' },
         },
       ]);
+      const createdAt = new Date('2026-08-05T10:10:00Z');
       mockPrismaService.soarExecution.create.mockResolvedValue({
         id: 'execution-1',
+        createdAt,
       });
 
       await service.evaluateTriggers('tenant-1', 'alert-1', Severity.CRITICAL);
@@ -80,6 +82,9 @@ describe('SoarService', () => {
           executionId: 'execution-1',
           alertId: 'alert-1',
           playbookId: 'playbook-1',
+          playbookName: 'Isolate host on critical alert',
+          severity: Severity.CRITICAL,
+          timestamp: createdAt,
         },
       );
     });

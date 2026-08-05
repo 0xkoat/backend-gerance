@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, VmVulnerability, VmAsset } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { SecurityModule } from '../common/security-module/security-module.interface';
@@ -19,7 +20,10 @@ export class VmService implements SecurityModule<
   VmVulnerability,
   VmQueryFilters
 > {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   async ingest(event: UnifiedEvent): Promise<void> {
     const data = event.data as {
@@ -41,7 +45,7 @@ export class VmService implements SecurityModule<
       },
     });
 
-    await this.prisma.vmVulnerability.create({
+    const vulnerability = await this.prisma.vmVulnerability.create({
       data: {
         tenantId: event.tenantId,
         assetId: asset.id,
@@ -50,6 +54,11 @@ export class VmService implements SecurityModule<
         severity: event.severity,
         rawData: event.data as Prisma.InputJsonValue,
       },
+    });
+
+    this.eventEmitter.emit('vm.vulnerability.created', {
+      ...event,
+      data: { ...event.data, vulnerabilityId: vulnerability.id },
     });
   }
 
