@@ -1,15 +1,21 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { UnauthorizedException } from '@nestjs/common';
+import { Logger, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as argon2 from 'argon2';
+import { createHash } from 'crypto';
 import { AuthService } from './auth.service';
 import { UsersService } from '../users/users.service';
+import { PrismaService } from '../prisma/prisma.service';
 import { UserRole } from '../generated/prisma/client';
 
 jest.mock('argon2');
 
 const DUMMY_HASH =
   '$argon2id$v=19$m=65536,t=3,p=4$GI8yFc6QCemSdwM0skhZvg$3elgnlxE0oIy891fIvSi8cabR0CpJgR2fGQ/xqKpOys';
+
+function hashOf(raw: string): string {
+  return createHash('sha256').update(raw).digest('hex');
+}
 
 const mockUsersService = {
   findByEmail: jest.fn(),
@@ -18,6 +24,19 @@ const mockUsersService = {
 
 const mockJwtService = {
   sign: jest.fn(),
+};
+
+const mockPrismaService = {
+  user: {
+    findUnique: jest.fn(),
+  },
+  refreshToken: {
+    findUnique: jest.fn(),
+    create: jest.fn(),
+    update: jest.fn(),
+    updateMany: jest.fn(),
+    deleteMany: jest.fn(),
+  },
 };
 
 describe('AuthService', () => {
@@ -31,6 +50,7 @@ describe('AuthService', () => {
         AuthService,
         { provide: UsersService, useValue: mockUsersService },
         { provide: JwtService, useValue: mockJwtService },
+        { provide: PrismaService, useValue: mockPrismaService },
       ],
     }).compile();
 
@@ -120,22 +140,27 @@ describe('AuthService', () => {
   });
 
   describe('login', () => {
-    it('signs a JWT with sub, role, tenantId and mustChangePassword, and returns them alongside access_token', async () => {
-      const safeUser = {
-        id: '1',
-        email: 'bob@x.com',
-        name: 'Bob',
-        phoneNumber: '+21612345678',
-        role: UserRole.ANALYST,
-        tenantId: 'tenant-1',
-        mustChangePassword: false,
-        passwordResetRequestedAt: null,
-        updatedAt: new Date(),
-        createdAt: new Date(),
-      };
+    const safeUser = {
+      id: '1',
+      email: 'bob@x.com',
+      name: 'Bob',
+      phoneNumber: '+21612345678',
+      role: UserRole.ANALYST,
+      tenantId: 'tenant-1',
+      mustChangePassword: false,
+      passwordResetRequestedAt: null,
+      updatedAt: new Date(),
+      createdAt: new Date(),
+    };
+
+    beforeEach(() => {
+      mockPrismaService.refreshToken.create.mockResolvedValue({ id: 'rt-1' });
+    });
+
+    it('signs a JWT with sub, role, tenantId and mustChangePassword', async () => {
       mockJwtService.sign.mockReturnValue('signed-jwt');
 
-      const result = await service.login(safeUser);
+      await service.login(safeUser);
 
       expect(mockJwtService.sign).toHaveBeenCalledWith({
         sub: '1',
@@ -143,65 +168,236 @@ describe('AuthService', () => {
         tenantId: 'tenant-1',
         mustChangePassword: false,
       });
-      expect(result).toEqual({
-        access_token: 'signed-jwt',
-        mustChangePassword: false,
-      });
     });
 
     it('signs tenantId as null for a Super Admin (no tenant)', async () => {
-      const safeUser = {
+      const superAdmin = {
+        ...safeUser,
         id: '2',
-        email: 'root@x.com',
-        name: 'Root',
-        phoneNumber: '+21600000000',
         role: UserRole.SUPER_ADMIN,
         tenantId: null,
-        mustChangePassword: false,
-        passwordResetRequestedAt: null,
-        updatedAt: new Date(),
-        createdAt: new Date(),
       };
+      mockJwtService.sign.mockReturnValue('signed-jwt');
+
+      await service.login(superAdmin);
+
+      expect(mockJwtService.sign).toHaveBeenCalledWith(
+        expect.objectContaining({ sub: '2', tenantId: null }),
+      );
+    });
+
+    it('persists a new refresh token in a fresh family and returns it alongside the access token', async () => {
       mockJwtService.sign.mockReturnValue('signed-jwt');
 
       const result = await service.login(safeUser);
 
-      expect(mockJwtService.sign).toHaveBeenCalledWith({
-        sub: '2',
-        role: UserRole.SUPER_ADMIN,
-        tenantId: null,
-        mustChangePassword: false,
+      expect(mockPrismaService.refreshToken.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          userId: '1',
+          tokenHash: expect.any(String),
+          familyId: expect.any(String),
+          expiresAt: expect.any(Date),
+        }),
       });
       expect(result).toEqual({
-        access_token: 'signed-jwt',
+        accessToken: 'signed-jwt',
         mustChangePassword: false,
+        refreshToken: expect.any(String),
+        refreshTokenExpiresAt: expect.any(Date),
       });
     });
 
-    it('propagates mustChangePassword: true through to both the JWT payload and the response body', async () => {
-      const safeUser = {
-        id: '3',
-        email: 'reset@x.com',
-        name: 'Reset User',
-        phoneNumber: '+21620000003',
-        role: UserRole.VIEWER,
-        tenantId: 'tenant-1',
-        mustChangePassword: true,
-        passwordResetRequestedAt: null,
-        updatedAt: new Date(),
-        createdAt: new Date(),
-      };
+    it('propagates mustChangePassword: true through to both the JWT payload and the response', async () => {
+      const forcedUser = { ...safeUser, mustChangePassword: true };
       mockJwtService.sign.mockReturnValue('signed-jwt');
 
-      const result = await service.login(safeUser);
+      const result = await service.login(forcedUser);
 
       expect(mockJwtService.sign).toHaveBeenCalledWith(
         expect.objectContaining({ mustChangePassword: true }),
       );
+      expect(result.mustChangePassword).toBe(true);
+    });
+  });
+
+  describe('refresh', () => {
+    const userId = 'user-1';
+    const familyId = 'family-1';
+    const dbUser = {
+      id: userId,
+      email: 'bob@x.com',
+      name: 'Bob',
+      phoneNumber: '+21612345678',
+      role: UserRole.ANALYST,
+      tenantId: 'tenant-1',
+      mustChangePassword: false,
+      hashedPassword: 'hash',
+      passwordResetRequestedAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    it('throws when no token matches the presented value', async () => {
+      mockPrismaService.refreshToken.findUnique.mockResolvedValue(null);
+
+      await expect(service.refresh('bogus')).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('revokes the entire token family and throws when an already-revoked token is replayed', async () => {
+      mockPrismaService.refreshToken.findUnique.mockResolvedValue({
+        id: 'rt-1',
+        userId,
+        familyId,
+        tokenHash: hashOf('raw'),
+        revokedAt: new Date(),
+        expiresAt: new Date(Date.now() + 1000),
+      });
+
+      await expect(service.refresh('raw')).rejects.toThrow(
+        UnauthorizedException,
+      );
+      expect(mockPrismaService.refreshToken.updateMany).toHaveBeenCalledWith({
+        where: { familyId, revokedAt: null },
+        data: { revokedAt: expect.any(Date) },
+      });
+    });
+
+    it('throws when the token has expired', async () => {
+      mockPrismaService.refreshToken.findUnique.mockResolvedValue({
+        id: 'rt-1',
+        userId,
+        familyId,
+        tokenHash: hashOf('raw'),
+        revokedAt: null,
+        expiresAt: new Date(Date.now() - 1000),
+      });
+
+      await expect(service.refresh('raw')).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('throws when the referenced user no longer exists', async () => {
+      mockPrismaService.refreshToken.findUnique.mockResolvedValue({
+        id: 'rt-1',
+        userId,
+        familyId,
+        tokenHash: hashOf('raw'),
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 1000),
+      });
+      mockPrismaService.user.findUnique.mockResolvedValue(null);
+
+      await expect(service.refresh('raw')).rejects.toThrow(
+        UnauthorizedException,
+      );
+    });
+
+    it('rotates: revokes the used token, issues a new one in the same family, and signs a fresh access token', async () => {
+      mockPrismaService.refreshToken.findUnique.mockResolvedValue({
+        id: 'rt-1',
+        userId,
+        familyId,
+        tokenHash: hashOf('raw'),
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 1000),
+      });
+      mockPrismaService.user.findUnique.mockResolvedValue(dbUser);
+      mockPrismaService.refreshToken.create.mockResolvedValue({ id: 'rt-2' });
+      mockJwtService.sign.mockReturnValue('new-jwt');
+
+      const result = await service.refresh('raw');
+
+      expect(mockPrismaService.refreshToken.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          userId,
+          familyId,
+          tokenHash: expect.any(String),
+          expiresAt: expect.any(Date),
+        }),
+      });
+      expect(mockPrismaService.refreshToken.update).toHaveBeenCalledWith({
+        where: { id: 'rt-1' },
+        data: { revokedAt: expect.any(Date), replacedByTokenId: 'rt-2' },
+      });
       expect(result).toEqual({
-        access_token: 'signed-jwt',
+        accessToken: 'new-jwt',
+        mustChangePassword: false,
+        refreshToken: expect.any(String),
+        refreshTokenExpiresAt: expect.any(Date),
+      });
+    });
+
+    it('carries mustChangePassword: true through the rotated response', async () => {
+      mockPrismaService.refreshToken.findUnique.mockResolvedValue({
+        id: 'rt-1',
+        userId,
+        familyId,
+        tokenHash: hashOf('raw'),
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 1000),
+      });
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        ...dbUser,
         mustChangePassword: true,
       });
+      mockPrismaService.refreshToken.create.mockResolvedValue({ id: 'rt-2' });
+      mockJwtService.sign.mockReturnValue('new-jwt');
+
+      const result = await service.refresh('raw');
+
+      expect(result.mustChangePassword).toBe(true);
+    });
+  });
+
+  describe('logout', () => {
+    it('revokes the matching non-revoked token', async () => {
+      await service.logout('raw-token');
+
+      expect(mockPrismaService.refreshToken.updateMany).toHaveBeenCalledWith({
+        where: { tokenHash: hashOf('raw-token'), revokedAt: null },
+        data: { revokedAt: expect.any(Date) },
+      });
+    });
+  });
+
+  describe('cleanupExpiredRefreshTokens', () => {
+    it('deletes only rows past their own expiry', async () => {
+      mockPrismaService.refreshToken.deleteMany.mockResolvedValue({
+        count: 3,
+      });
+
+      await service.cleanupExpiredRefreshTokens();
+
+      expect(mockPrismaService.refreshToken.deleteMany).toHaveBeenCalledWith({
+        where: { expiresAt: { lt: expect.any(Date) } },
+      });
+    });
+
+    it('logs the purged count when rows were deleted', async () => {
+      const logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+      mockPrismaService.refreshToken.deleteMany.mockResolvedValue({
+        count: 2,
+      });
+
+      await service.cleanupExpiredRefreshTokens();
+
+      expect(logSpy).toHaveBeenCalledWith('Purged 2 expired refresh token(s)');
+      logSpy.mockRestore();
+    });
+
+    it('does not log when nothing was purged', async () => {
+      const logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation();
+      mockPrismaService.refreshToken.deleteMany.mockResolvedValue({
+        count: 0,
+      });
+
+      await service.cleanupExpiredRefreshTokens();
+
+      expect(logSpy).not.toHaveBeenCalled();
+      logSpy.mockRestore();
     });
   });
 

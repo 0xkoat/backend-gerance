@@ -53,8 +53,24 @@ model User {
   createdAt                DateTime    @default(now())
   updatedAt                DateTime    @updatedAt
   assignedSiemAlerts       SiemAlert[]
+  refreshTokens            RefreshToken[]
 
   @@index([tenantId])
+}
+
+model RefreshToken {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @db.Uuid
+  user              User      @relation(fields: [userId], references: [id])
+  tokenHash         String    @unique
+  familyId          String    @db.Uuid
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  replacedByTokenId String?   @db.Uuid
+  createdAt         DateTime  @default(now())
+
+  @@index([userId])
+  @@index([familyId])
 }
 
 enum ModuleName {

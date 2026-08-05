@@ -119,6 +119,7 @@ describe('SiemController (e2e)', () => {
       .useValue({
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
+        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
       })
       .compile();
 
@@ -356,6 +357,7 @@ describe('EDR -> SIEM integration (e2e, real event chain)', () => {
         ...statefulPrisma,
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
+        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
       })
       .compile();
 
