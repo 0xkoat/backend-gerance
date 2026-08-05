@@ -2,6 +2,7 @@ import {
   ConflictException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -13,6 +14,8 @@ import * as argon2 from 'argon2';
 
 @Injectable()
 export class UsersService {
+  private readonly logger = new Logger(UsersService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async findByEmail(email: string) {
@@ -76,6 +79,9 @@ export class UsersService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
+        this.logger.warn(
+          `User creation rejected — duplicate email: ${rest.email}`,
+        );
         throw new ConflictException('A user with this email already exists');
       }
       throw error;
@@ -99,6 +105,9 @@ export class UsersService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
+        this.logger.warn(
+          `User update rejected — duplicate email for user ${id}`,
+        );
         throw new ConflictException('A user with this email already exists');
       }
       throw error;

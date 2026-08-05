@@ -1,6 +1,7 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma, UserRole } from '../generated/prisma/client';
@@ -10,6 +11,8 @@ import * as argon2 from 'argon2';
 
 @Injectable()
 export class TenantsService {
+  private readonly logger = new Logger(TenantsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   async createTenantWithAdmin(createTenantDto: CreateTenantDto) {
@@ -42,6 +45,9 @@ export class TenantsService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
+        this.logger.warn(
+          `Tenant creation rejected — duplicate admin email: ${email}`,
+        );
         throw new ConflictException('A user with this email already exists');
       }
       throw error;

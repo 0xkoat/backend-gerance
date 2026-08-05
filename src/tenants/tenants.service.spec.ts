@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { TenantsService } from './tenants.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -134,7 +134,8 @@ describe('TenantsService', () => {
       );
     });
 
-    it('throws ConflictException when the admin email already exists (Prisma P2002)', async () => {
+    it('throws ConflictException and logs a warning when the admin email already exists (Prisma P2002)', async () => {
+      const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation();
       (mockPrismaService.$transaction as jest.Mock).mockRejectedValue(
         prismaKnownError('P2002'),
       );
@@ -142,6 +143,8 @@ describe('TenantsService', () => {
       await expect(service.createTenantWithAdmin(dto)).rejects.toThrow(
         ConflictException,
       );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(dto.email));
+      warnSpy.mockRestore();
     });
 
     it('rethrows unrelated errors instead of swallowing them', async () => {

@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { DfirIncident, DfirLink, Prisma } from '../generated/prisma/client';
 import {
@@ -32,6 +32,8 @@ export class DfirService implements SecurityModule<
   DfirIncident,
   DfirQueryFilters
 > {
+  private readonly logger = new Logger(DfirService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
@@ -163,7 +165,8 @@ export class DfirService implements SecurityModule<
         status: 'ok',
         lastIngestion: latest?.createdAt,
       };
-    } catch {
+    } catch (error) {
+      this.logger.error('DFIR health check failed', error);
       return { module: ModuleName.DFIR, status: 'down' };
     }
   }

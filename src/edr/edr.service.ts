@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, EdrDetection, EdrEndpoint } from '../generated/prisma/client';
 import { ModuleName, EdrEndpointStatus } from '../generated/prisma/enums';
@@ -19,6 +19,8 @@ export class EdrService implements SecurityModule<
   EdrDetection,
   EdrQueryFilters
 > {
+  private readonly logger = new Logger(EdrService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventEmitter: EventEmitter2,
@@ -112,7 +114,8 @@ export class EdrService implements SecurityModule<
         status: 'ok',
         lastIngestion: latest?.createdAt,
       };
-    } catch {
+    } catch (error) {
+      this.logger.error('EDR health check failed', error);
       return { module: ModuleName.EDR, status: 'down' };
     }
   }

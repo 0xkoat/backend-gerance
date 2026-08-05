@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DfirService, DfirQueryFilters } from './dfir.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -354,14 +354,21 @@ describe('DfirService', () => {
       });
     });
 
-    it('returns down when the database query fails', async () => {
-      mockPrismaService.dfirIncident.findFirst.mockRejectedValue(
-        new Error('connection lost'),
-      );
+    it('returns down and logs the error when the database query fails', async () => {
+      const errorSpy = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation();
+      const dbError = new Error('connection lost');
+      mockPrismaService.dfirIncident.findFirst.mockRejectedValue(dbError);
 
       const result = await service.healthCheck();
 
       expect(result).toEqual({ module: ModuleName.DFIR, status: 'down' });
+      expect(errorSpy).toHaveBeenCalledWith(
+        'DFIR health check failed',
+        dbError,
+      );
+      errorSpy.mockRestore();
     });
   });
 

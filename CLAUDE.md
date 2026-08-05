@@ -694,18 +694,51 @@ polling-ingestion skeleton come after all six modules exist, since they all read
       0-6. Worth a light follow-up pass once Phases 7-11 (Asset aggregator, SSE, polling, seed,
       final integration) land, so the dev log doesn't drift from what's actually built.
 
-## Phase 12 — Deferred: introduce `Logger` project-wide
+## Phase 12 — Introduce `Logger` project-wide
 
-Flagged 2026-08-04 while reviewing `VmService.healthCheck()`'s `catch` block: this codebase
-doesn't use NestJS's `Logger` anywhere yet (confirmed via repo-wide grep) — every `catch` today
-either rethrows or silently swallows. That's fine for now (the plain `catch {}` fix in
-`VmService.healthCheck()` matches existing convention), but a real logging convention would
-make failures like a health check going `'down'` actually debuggable instead of just visible as
-a status flag with no context. **Deliberately deferred, not forgotten** — don't introduce
-`Logger` piecemeal in one module's catch block; it should be a single, consistent decision
-applied across the whole codebase (auth, users, tenants, and all six security modules) once the
-module build-out (Phases 0–11) is done, not bolted on ad hoc along the way.
+Flagged 2026-08-04 while reviewing `VmService.healthCheck()`'s `catch` block, originally
+deferred until Phases 0–11 were done so the convention could be applied once, consistently,
+rather than piecemeal. **Reordered ahead of Phases 10–11 on 2026-08-05** — deliberately, not a
+plan drift: Phase 10 (seed data) runs outside the NestJS app entirely (`ts-node
+prisma/seed.ts`, no DI container, can't use the injectable `Logger` the way application code
+does), and Phase 11 is verification work, not new application code — so the "avoid piecemeal
+work" risk the original deferral was protecting against barely applied. Doing it first also
+means Phase 11.1's full-chain smoke test gets to benefit from real logging while debugging,
+instead of the other way around.
 
-- [ ] Decide and apply a project-wide `Logger` convention (where it's injected, what gets
-      logged at what level, whether it replaces or supplements existing silent/rethrow error
-      handling) across the whole backend, once Phases 0–11 are complete.
+**Two-layer convention** (the user's stated goal: "Logger should handle all errors in the
+codebase"):
+
+- [x] **Global `AllExceptionsFilter`** (`src/common/filters/all-exceptions.filter.ts`, `@Catch()`,
+      registered via `app.useGlobalFilters(...)` in `main.ts`) — the actual "handle all errors"
+      mechanism. Every exception reaching the HTTP boundary, from anywhere, passes through this
+      one place before becoming a response; it logs, then returns the exact same response NestJS
+      would have sent anyway (`exception.getResponse()` forwarded unchanged for `HttpException`,
+      the standard `{statusCode: 500, message: 'Internal server error'}` shape otherwise — same
+      as NestJS's own default handler, verified no e2e test asserts on error-body shape before
+      relying on this). 5xx / unknown thrown values log at `error` with the full stack and
+      request context (method, path, `tenantId`/`userId` from `request.user` when authenticated);
+      4xx logs at `debug` only — expected, client-driven outcomes aren't application faults, and
+      logging every 404 at `error`/`warn` would drown out the failures that actually matter. This
+      is what makes "all errors" true without needing try/catch added to every service method
+      that doesn't have one today (`AssetService`, `EventsService`, `PollingService`, every
+      `ingest()`, etc.) — anything unhandled already propagates up and hits this filter.
+      + `all-exceptions.filter.spec.ts` (response shape preserved, 5xx logged at error with
+      stack, 4xx logged at debug not error, tenantId/userId included when authenticated, `n/a`
+      fallback when not). Verified live against a real running server: three real requests (401
+      unauthenticated, 404 unknown route, 401 bad login) all preserved their exact original
+      response bodies/status codes while the filter logged each at `DEBUG` with correct context.
+- [x] **Per-class `Logger` instances, only where an error is caught and *not* rethrown** — the
+      one gap the filter can't cover, since a swallowed error never reaches it. Fixed the six
+      modules' `healthCheck()` methods (`vm`, `edr`, `siem`, `cti`, `soar`, `dfir` — the original
+      motivating example): `catch {}` → `catch (error) { this.logger.error('<MODULE> health
+      check failed', error); ... }`, each with a `private readonly logger = new
+      Logger(XxxService.name);` field (the standard NestJS idiom — no custom wrapper, no DI
+      token, since nothing here needs more than that). Also added `logger.warn(...)` to the
+      three existing translate-and-rethrow blocks (`TenantsService.createTenantWithAdmin`,
+      `UsersService.createUser`/`updateUserForTenant` — catch a Prisma P2002, throw
+      `ConflictException`) — not required for coverage (the rethrow path already reaches the
+      filter), but useful operational signal the filter's 4xx-skip would otherwise discard
+      entirely (e.g. "someone hit a duplicate email during tenant creation"). Every touched spec
+      updated to spy on `Logger.prototype.error`/`warn` and assert the call, not just the
+      existing return-value/thrown-exception behavior. 316 unit / 128 e2e passing.
