@@ -77,12 +77,32 @@ export class TenantsService {
   async deleteTenantWithUsers(id: string) {
     await this.findById(id);
 
-    const [, , deletedTenant] = await this.prisma.$transaction([
-      this.prisma.user.deleteMany({ where: { tenantId: id } }),
+    // Every security-module table's tenantId FK is RESTRICT (Prisma's
+    // default), so each one has to be cleared before the Tenant row itself
+    // can go — order matters here: children before the parents they
+    // reference (e.g. DfirLink before DfirIncident, SoarExecution before
+    // both SoarPlaybook and SiemAlert), and SiemAlert before User since an
+    // alert can optionally reference its assignedToUser.
+    const results = await this.prisma.$transaction([
+      this.prisma.assetFeedEntry.deleteMany({ where: { tenantId: id } }),
+      this.prisma.dfirLink.deleteMany({ where: { tenantId: id } }),
+      this.prisma.dfirIncident.deleteMany({ where: { tenantId: id } }),
+      this.prisma.soarExecution.deleteMany({ where: { tenantId: id } }),
+      this.prisma.soarPlaybook.deleteMany({ where: { tenantId: id } }),
+      this.prisma.siemAlert.deleteMany({ where: { tenantId: id } }),
+      this.prisma.siemLog.deleteMany({ where: { tenantId: id } }),
+      this.prisma.edrDetection.deleteMany({ where: { tenantId: id } }),
+      this.prisma.edrEndpoint.deleteMany({ where: { tenantId: id } }),
+      this.prisma.ctiIoc.deleteMany({ where: { tenantId: id } }),
+      this.prisma.vmVulnerability.deleteMany({ where: { tenantId: id } }),
+      this.prisma.vmAsset.deleteMany({ where: { tenantId: id } }),
       this.prisma.tenantModule.deleteMany({ where: { tenantId: id } }),
+      this.prisma.user.deleteMany({ where: { tenantId: id } }),
       this.prisma.tenant.delete({ where: { id } }),
     ]);
 
+    // Last element is the tenant.delete() result, per the array above.
+    const deletedTenant = results[14];
     return deletedTenant;
   }
 }

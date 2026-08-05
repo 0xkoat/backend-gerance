@@ -34,6 +34,18 @@ const mockPrismaService = {
   tenantModule: {
     deleteMany: jest.fn(),
   },
+  assetFeedEntry: { deleteMany: jest.fn() },
+  dfirLink: { deleteMany: jest.fn() },
+  dfirIncident: { deleteMany: jest.fn() },
+  soarExecution: { deleteMany: jest.fn() },
+  soarPlaybook: { deleteMany: jest.fn() },
+  siemAlert: { deleteMany: jest.fn() },
+  siemLog: { deleteMany: jest.fn() },
+  edrDetection: { deleteMany: jest.fn() },
+  edrEndpoint: { deleteMany: jest.fn() },
+  ctiIoc: { deleteMany: jest.fn() },
+  vmVulnerability: { deleteMany: jest.fn() },
+  vmAsset: { deleteMany: jest.fn() },
   $transaction: jest.fn(defaultTransactionImplementation),
 };
 
@@ -207,27 +219,88 @@ describe('TenantsService', () => {
       createdAt: new Date(),
     };
 
-    it('deletes all users, all tenant modules, then the tenant, in that order', async () => {
+    it('deletes every security-module table scoped to the tenant, then tenant modules, users, and finally the tenant itself', async () => {
       mockPrismaService.tenant.findUnique.mockResolvedValue({
         ...existingTenant,
         users: [],
       });
-      mockPrismaService.user.deleteMany.mockResolvedValue({ count: 3 });
-      mockPrismaService.tenantModule.deleteMany.mockResolvedValue({ count: 2 });
       mockPrismaService.tenant.delete.mockResolvedValue(existingTenant);
 
       const result = await service.deleteTenantWithUsers('tenant-1');
 
-      expect(mockPrismaService.user.deleteMany).toHaveBeenCalledWith({
-        where: { tenantId: 'tenant-1' },
-      });
-      expect(mockPrismaService.tenantModule.deleteMany).toHaveBeenCalledWith({
-        where: { tenantId: 'tenant-1' },
-      });
+      const scopedTables = [
+        mockPrismaService.assetFeedEntry,
+        mockPrismaService.dfirLink,
+        mockPrismaService.dfirIncident,
+        mockPrismaService.soarExecution,
+        mockPrismaService.soarPlaybook,
+        mockPrismaService.siemAlert,
+        mockPrismaService.siemLog,
+        mockPrismaService.edrDetection,
+        mockPrismaService.edrEndpoint,
+        mockPrismaService.ctiIoc,
+        mockPrismaService.vmVulnerability,
+        mockPrismaService.vmAsset,
+        mockPrismaService.tenantModule,
+        mockPrismaService.user,
+      ];
+      for (const table of scopedTables) {
+        expect(table.deleteMany).toHaveBeenCalledWith({
+          where: { tenantId: 'tenant-1' },
+        });
+      }
       expect(mockPrismaService.tenant.delete).toHaveBeenCalledWith({
         where: { id: 'tenant-1' },
       });
       expect(result).toEqual(existingTenant);
+    });
+
+    it('deletes the module tables that reference other module tables before those tables', async () => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        ...existingTenant,
+        users: [],
+      });
+      mockPrismaService.tenant.delete.mockResolvedValue(existingTenant);
+      const callOrder: string[] = [];
+      const trackCall = (name: string, mockFn: jest.Mock) =>
+        mockFn.mockImplementation(() => {
+          callOrder.push(name);
+          return Promise.resolve({ count: 0 });
+        });
+      trackCall('dfirLink', mockPrismaService.dfirLink.deleteMany);
+      trackCall('dfirIncident', mockPrismaService.dfirIncident.deleteMany);
+      trackCall('soarExecution', mockPrismaService.soarExecution.deleteMany);
+      trackCall('soarPlaybook', mockPrismaService.soarPlaybook.deleteMany);
+      trackCall('siemAlert', mockPrismaService.siemAlert.deleteMany);
+      trackCall('edrDetection', mockPrismaService.edrDetection.deleteMany);
+      trackCall('edrEndpoint', mockPrismaService.edrEndpoint.deleteMany);
+      trackCall(
+        'vmVulnerability',
+        mockPrismaService.vmVulnerability.deleteMany,
+      );
+      trackCall('vmAsset', mockPrismaService.vmAsset.deleteMany);
+      trackCall('user', mockPrismaService.user.deleteMany);
+
+      await service.deleteTenantWithUsers('tenant-1');
+
+      expect(callOrder.indexOf('dfirLink')).toBeLessThan(
+        callOrder.indexOf('dfirIncident'),
+      );
+      expect(callOrder.indexOf('soarExecution')).toBeLessThan(
+        callOrder.indexOf('soarPlaybook'),
+      );
+      expect(callOrder.indexOf('soarExecution')).toBeLessThan(
+        callOrder.indexOf('siemAlert'),
+      );
+      expect(callOrder.indexOf('edrDetection')).toBeLessThan(
+        callOrder.indexOf('edrEndpoint'),
+      );
+      expect(callOrder.indexOf('vmVulnerability')).toBeLessThan(
+        callOrder.indexOf('vmAsset'),
+      );
+      expect(callOrder.indexOf('siemAlert')).toBeLessThan(
+        callOrder.indexOf('user'),
+      );
     });
 
     it('throws NotFoundException when the tenant does not exist, without touching any data', async () => {

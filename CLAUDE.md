@@ -592,8 +592,42 @@ polling-ingestion skeleton come after all six modules exist, since they all read
       are filtered out, all six event names are subscribed, and unsubscribing actually stops
       delivery) + `events.controller.spec.ts` (thin, mocked `EventsService`, matches every other
       controller spec's pattern). Wired into `AppModule`. 295 unit / 128 e2e passing.
-- [ ] Manual verification: `curl -N` against the endpoint with a real JWT, ingest something via
-      an existing module route in another terminal, confirm the event arrives on the stream.
+- [x] Manual verification, done 2026-08-05 against a real running dev server + Postgres: created
+      a fresh tenant/Admin via the Super Admin, opened `curl -N /api/events/stream` with that
+      Admin's JWT, POSTed a real `POST /api/edr/events` from another terminal, and watched both
+      the resulting EDR detection *and* the SIEM alert it triggers arrive live on the open
+      stream, correctly shaped (`id:`/`data:` SSE frames) and correctly attributed to the
+      tenant. Went further than the plan's minimum and also verified the tenant-isolation
+      requirement directly (the entire reason this phase exists): opened a second stream as a
+      second tenant's Admin and confirmed it stayed completely silent while the first tenant's
+      event fired — proves the `filter` in `EventsService.streamForTenant` actually holds under
+      a real HTTP connection, not just in the unit test's synthetic `EventEmitter2`.
+      **Unrelated bug found during cleanup, not fixed here**: `DELETE /api/tenants/:id` throws a
+      500 (`FK constraint ... RESTRICT ... EdrEndpoint_tenantId_fkey`) for any tenant that has
+      ever ingested data through any of the six security modules. `TenantsService.
+      deleteTenantWithUsers` only deletes `User` and `TenantModule` rows before deleting the
+      `Tenant` — written back in the original Auth/Tenants phase, before any module tables
+      existed, and never revisited once they were added. Every module table's `tenantId` FK is
+      `RESTRICT` (Prisma's default), so tenant deletion has been silently broken for any
+      tenant with real module data since Phase 1. **Fixed 2026-08-05, immediately after Phase 8**
+      (tracked separately, not folded into this phase's own checkbox since it's unrelated to
+      SSE): `deleteTenantWithUsers` now explicitly deletes all twelve module tables — plus
+      `DfirLink` — inside its existing `$transaction` array, in dependency order (children
+      before the parents they reference: `AssetFeedEntry, DfirLink, DfirIncident,
+      SoarExecution, SoarPlaybook, SiemAlert, SiemLog, EdrDetection, EdrEndpoint, CtiIoc,
+      VmVulnerability, VmAsset`, then `TenantModule, User, Tenant` — `SiemAlert` before `User`
+      specifically, since an alert can optionally reference its `assignedToUser`). Chose this
+      over `onDelete: Cascade` in `schema.prisma` deliberately: this codebase has never used
+      cascade on any of its ~18 relations, this keeps that record intact, and a destructive
+      operation like "wipe a tenant's entire security history" stays confined to one reviewed
+      service method rather than firing implicitly from any future code path that touches
+      `Tenant.delete()`. Verified against the real dev database (the exact same order, run live
+      during this phase's own cleanup, successfully deleted a tenant carrying real EDR/SIEM/
+      Asset-feed data). `tenants.service.spec.ts` gained a full-coverage test (every table
+      called with the right `tenantId`) and an explicit ordering test (tracks call order via a
+      shared array, asserts each dependency constraint); `test/tenants.e2e-spec.ts`'s mocked
+      `PrismaService` and fixed `$transaction` resolved array both updated to match. 296 unit /
+      128 e2e passing.
 - [ ] **Not in this phase:** proxying this through the Next.js BFF layer — that's frontend work,
       and per the earlier design discussion, streaming through a Next.js Route Handler needs its
       own doc-check (`node_modules/next/dist/docs/`) before assuming it behaves like a normal
@@ -601,16 +635,43 @@ polling-ingestion skeleton come after all six modules exist, since they all read
 
 ## Phase 9 — Scheduled polling ingestion skeleton
 
-- [ ] `interface ModuleDataSourceAdapter { fetchSince(config: Record<string, unknown>, since?:
-      Date): Promise<RawRecord[]> }` in `src/common/security-module/`.
-- [ ] `MockAdapter implements ModuleDataSourceAdapter` — returns canned fake records per module,
-      so the cron path is real and testable without any actual vendor access (per root
-      `CLAUDE.md`: module API docs are still an open input).
-- [ ] `PollingService` — `@Cron()` job iterating `TenantModule` rows where `isActive: true`,
-      calling the right module's adapter (via the `MockAdapter` for now) + that module's
-      `ingest()`, then updating a `lastSyncedAt` value in `TenantModule.config`.
-      + `polling.service.spec.ts`.
-- [ ] Real per-vendor adapters are explicitly **not** part of this plan — out of scope until
+- [x] `ModuleDataSourceAdapter` in `src/common/security-module/data-source-adapter.interface.ts`:
+      `fetchSince(moduleName: ModuleName, config: Record<string, unknown>, since?: Date):
+      Promise<RawRecord[]>` — one deliberate deviation from the plan's originally-sketched
+      signature: added the leading `moduleName` param. `MockAdapter` is one object standing in
+      for all six modules' adapters at once, so it genuinely needs to know which module it's
+      being asked for at call time (a real per-vendor adapter wouldn't need this — it already
+      knows its own module — but the interface has to serve both cases). Also added
+      `RawRecord { timestamp, type, severity, data }` to `types.ts` — everything `ingest()`
+      needs to build a `UnifiedEvent` except `tenantId`/`source`, which only the poller (not the
+      adapter) knows. Exported `MODULE_DATA_SOURCE_ADAPTER` (a string DI token) from the same
+      file — interfaces don't exist at runtime, so NestJS can't infer an injection token from
+      `ModuleDataSourceAdapter` the way it does for a concrete class; this token is what lets
+      `PollingService` depend on the interface instead of `MockAdapter` directly (caught by the
+      compiler mid-build: typing the constructor param as the concrete class broke call sites
+      that legitimately pass all three interface params, revealing the DI was accidentally
+      binding to the narrower concrete type instead of the interface it's supposed to
+      abstract over).
+- [x] `src/polling/mock-adapter.ts` — one canned `RawRecord` per module (`ModuleName.VM` →
+      `type: 'vulnerability'`, `EDR` → `'detection'`, `SIEM`/`SOAR`/`DFIR` → `'event'`, `CTI` →
+      `'ioc'`), ignores `config`/`since` entirely (only meaningful once a real vendor is behind
+      it). + `mock-adapter.spec.ts` (one record returned, correct `type` shape per module,
+      confirms `config`/`since` really are ignored).
+- [x] `PollingService` (`src/polling/`) — `@Cron(CronExpression.EVERY_5_MINUTES)` job iterating
+      `TenantModule` rows where `isActive: true`. Routes each row to the right module service via
+      a `Record<ModuleName, IngestibleModule>` registry built in the constructor from all six
+      injected services (matches decision 5's generic `SecurityModule` contract — this is exactly
+      the kind of code that contract exists to make possible, no per-module `switch`). Reads
+      `since` from `TenantModule.config.lastSyncedAt` if present (`undefined` on a tenant-module's
+      first-ever poll), calls the adapter, `ingest()`s every returned record, then writes a fresh
+      `lastSyncedAt` back into `config` — reusing that existing `Json?` field rather than adding a
+      schema column, per the plan's own text. + `polling.service.spec.ts` (no-`since`-on-first-
+      poll, `since` parsed and other config keys preserved on subsequent polls, correct per-module
+      routing for all six modules, multiple records per poll all ingested, `pollAll` iterates every
+      active row). Verified with a real app boot (`NestFactory.create(AppModule)`, not just
+      mocked-provider unit tests) that the full DI graph — the adapter token, all six service
+      injections, `PrismaModule` — actually resolves. 310 unit / 128 e2e passing.
+- [x] Real per-vendor adapters are explicitly **not** part of this plan — out of scope until
       real module API documentation exists (root `CLAUDE.md`'s "open input required" note).
 
 ## Phase 10 — Seed data for local dev / demo

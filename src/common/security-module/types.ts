@@ -52,3 +52,9 @@ export interface SoarExecutionPayload {
   severity: Severity;
   timestamp: Date;
 }
+export interface RawRecord {
+  timestamp: Date;
+  type: EventType;
+  severity: Severity;
+  data: Record<string, unknown>;
+}
