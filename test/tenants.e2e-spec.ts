@@ -65,6 +65,18 @@ describe('TenantsController (e2e)', () => {
     tenantModule: {
       deleteMany: jest.fn(),
     },
+    assetFeedEntry: { deleteMany: jest.fn() },
+    dfirLink: { deleteMany: jest.fn() },
+    dfirIncident: { deleteMany: jest.fn() },
+    soarExecution: { deleteMany: jest.fn() },
+    soarPlaybook: { deleteMany: jest.fn() },
+    siemAlert: { deleteMany: jest.fn() },
+    siemLog: { deleteMany: jest.fn() },
+    edrDetection: { deleteMany: jest.fn() },
+    edrEndpoint: { deleteMany: jest.fn() },
+    ctiIoc: { deleteMany: jest.fn() },
+    vmVulnerability: { deleteMany: jest.fn() },
+    vmAsset: { deleteMany: jest.fn() },
     $transaction: jest.fn(),
     onModuleInit: jest.fn(),
     onModuleDestroy: jest.fn(),
@@ -283,13 +295,25 @@ describe('TenantsController (e2e)', () => {
         users: [],
       });
       mockPrismaService.$transaction.mockResolvedValue([
-        { count: 3 },
-        { count: 1 },
+        { count: 0 }, // assetFeedEntry
+        { count: 0 }, // dfirLink
+        { count: 0 }, // dfirIncident
+        { count: 0 }, // soarExecution
+        { count: 0 }, // soarPlaybook
+        { count: 0 }, // siemAlert
+        { count: 0 }, // siemLog
+        { count: 0 }, // edrDetection
+        { count: 0 }, // edrEndpoint
+        { count: 0 }, // ctiIoc
+        { count: 0 }, // vmVulnerability
+        { count: 0 }, // vmAsset
+        { count: 1 }, // tenantModule
+        { count: 3 }, // user
         {
           id: 'tenant-1',
           name: 'Tenant One',
           createdAt: new Date().toISOString(),
-        },
+        }, // tenant.delete()
       ]);
 
       const response = await request(app.getHttpServer())

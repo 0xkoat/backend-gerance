@@ -14,6 +14,7 @@ import { SoarModule } from './soar/soar.module';
 import { DfirModule } from './dfir/dfir.module';
 import { AssetModule } from './asset/asset.module';
 import { EventsModule } from './events/events.module';
+import { PollingModule } from './polling/polling.module';
 import { APP_GUARD } from '@nestjs/core';
 import { RolesGuard } from './auth/guards/roles.guard';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
@@ -35,6 +36,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     DfirModule,
     AssetModule,
     EventsModule,
+    PollingModule,
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 10 }]),
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),
