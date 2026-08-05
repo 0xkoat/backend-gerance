@@ -563,10 +563,35 @@ polling-ingestion skeleton come after all six modules exist, since they all read
 
 ## Phase 8 — Real-time delivery (SSE)
 
-- [ ] `EventsController` — `@Sse('events/stream')`, subscribes to the shared `EventEmitter2`,
-      filters by `request.user.tenantId` before forwarding anything (never leak cross-tenant
-      events over this stream). + a unit test asserting the tenant filter actually excludes
-      other tenants' events.
+- [x] New `src/events/` module — `EventsService.streamForTenant(tenantId)` (returns
+      `Observable<MessageEvent>`) + thin `EventsController` (`@Controller('events')`,
+      `@Sse('stream')` → `GET /api/events/stream`, delegates to the service via the shared
+      `requireTenantId`). No `PrismaModule`/DB at all — this is a pure relay, the only service
+      in the backend that doesn't touch the database.
+      Explicit list chosen over `EventEmitterModule.forRoot({ wildcard: true })` (discussed and
+      decided before writing this) — merges `fromEvent(...)` for the same six `*.created` events
+      `AssetService` already listens to (EDR/SIEM/SOAR/DFIR/VM/CTI), not `cti.enrichment.applied`
+      (an update to an existing alert, not a new record). Real bugs caught while building it:
+      - `fromEvent`'s type-parameter overload for Node-style emitters (`EventEmitter2` matches
+        `NodeCompatibleEventEmitter`, not the DOM `HasEventTargetAddRemove` shape) is deprecated
+        in RxJS 7 — the Node-style handler signature is `(...args: any[]) => void`, so a type
+        param there was never actually checked, just asserted. Fixed by calling `fromEvent`
+        untyped and doing one explicit `map((event) => event as StreamableEvent)` right after
+        the `merge`, rather than typing each `fromEvent` call — same trust boundary, stated once
+        instead of six times, and doesn't trigger the deprecation.
+      - Three of the six event-name strings were wrong when first written (`'vulnerability.created'`
+        instead of `'vm.vulnerability.created'`, `'ioc.created'` instead of `'cti.ioc.created'`,
+        and a `'cti-enrichment.created'` that didn't correspond to any real emitted event at all)
+        — no compile error, since event names are just strings, but those subscriptions would
+        have silently never fired. Fixed to the real emitted names.
+      - `MessageEvent` wasn't imported at all initially, so it resolved against the global DOM
+        `MessageEvent` type instead of `@nestjs/common`'s own simpler `{ data, id?, type?, retry? }`
+        interface — fixed with an explicit import.
+      + `events.service.spec.ts` (real `EventEmitter2` instance, not mocked — the point is to
+      prove `fromEvent`'s actual behavior: same-tenant events pass through, other-tenant events
+      are filtered out, all six event names are subscribed, and unsubscribing actually stops
+      delivery) + `events.controller.spec.ts` (thin, mocked `EventsService`, matches every other
+      controller spec's pattern). Wired into `AppModule`. 295 unit / 128 e2e passing.
 - [ ] Manual verification: `curl -N` against the endpoint with a real JWT, ingest something via
       an existing module route in another terminal, confirm the event arrives on the stream.
 - [ ] **Not in this phase:** proxying this through the Next.js BFF layer — that's frontend work,
