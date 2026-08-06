@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { Logger, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { VmService, VmQueryFilters } from './vm.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -7,8 +7,10 @@ import {
   ModuleName,
   Severity,
   VmVulnerabilitiesStatus,
+  UserRole,
 } from '../generated/prisma/enums';
 import { UnifiedEvent } from '../common/security-module/types';
+import type { AuthenticatedUser } from '../auth/jwt.strategy';
 
 const mockPrismaService = {
   vmAsset: {
@@ -23,7 +25,20 @@ const mockPrismaService = {
     findUnique: jest.fn(),
     update: jest.fn(),
   },
+  user: {
+    findFirst: jest.fn(),
+  },
 };
+
+function authUser(overrides: Partial<AuthenticatedUser>): AuthenticatedUser {
+  return {
+    userId: 'caller-1',
+    role: UserRole.ANALYST,
+    tenantId: 'tenant-1',
+    mustChangePassword: false,
+    ...overrides,
+  };
+}
 
 const mockEventEmitter = {
   emit: jest.fn(),
@@ -322,6 +337,105 @@ describe('VmService', () => {
         ),
       ).rejects.toThrow(NotFoundException);
       expect(mockPrismaService.vmVulnerability.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('assignVulnerability', () => {
+    const existing = {
+      id: 'vuln-1',
+      tenantId: 'tenant-1',
+      status: VmVulnerabilitiesStatus.OPEN,
+      assignedToUserId: null,
+    };
+
+    it('lets an Analyst self-assign without touching the remediation status', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-1' });
+      mockPrismaService.vmVulnerability.findUnique.mockResolvedValue(existing);
+      mockPrismaService.vmVulnerability.update.mockResolvedValue({
+        ...existing,
+        assignedToUserId: 'analyst-1',
+      });
+
+      const result = await service.assignVulnerability(
+        'tenant-1',
+        'vuln-1',
+        caller,
+        undefined,
+      );
+
+      expect(result.assignedToUserId).toBe('analyst-1');
+      expect(mockPrismaService.vmVulnerability.update).toHaveBeenCalledWith({
+        where: { id: 'vuln-1' },
+        data: { assignedToUserId: 'analyst-1' },
+      });
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+        'vm.vulnerability.assigned',
+        expect.objectContaining({
+          tenantId: 'tenant-1',
+          source: ModuleName.VM,
+          recordId: 'vuln-1',
+          assignedToUserId: 'analyst-1',
+          status: VmVulnerabilitiesStatus.OPEN,
+        }),
+      );
+    });
+
+    it('lets an Admin assign a valid tenant Analyst', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.vmVulnerability.findUnique.mockResolvedValue(existing);
+      mockPrismaService.user.findFirst.mockResolvedValue({ id: 'analyst-2' });
+      mockPrismaService.vmVulnerability.update.mockResolvedValue({
+        ...existing,
+        assignedToUserId: 'analyst-2',
+      });
+
+      await service.assignVulnerability(
+        'tenant-1',
+        'vuln-1',
+        caller,
+        'analyst-2',
+      );
+
+      expect(mockPrismaService.vmVulnerability.update).toHaveBeenCalledWith({
+        where: { id: 'vuln-1' },
+        data: { assignedToUserId: 'analyst-2' },
+      });
+    });
+
+    it('rejects an Analyst trying to assign someone else', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-1' });
+      mockPrismaService.vmVulnerability.findUnique.mockResolvedValue(existing);
+
+      await expect(
+        service.assignVulnerability('tenant-1', 'vuln-1', caller, 'analyst-2'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrismaService.vmVulnerability.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the vulnerability does not exist', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.vmVulnerability.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.assignVulnerability(
+          'tenant-1',
+          'missing-id',
+          caller,
+          'analyst-1',
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws NotFoundException when the vulnerability belongs to a different tenant', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.vmVulnerability.findUnique.mockResolvedValue({
+        ...existing,
+        tenantId: 'tenant-2',
+      });
+
+      await expect(
+        service.assignVulnerability('tenant-1', 'vuln-1', caller, 'analyst-1'),
+      ).rejects.toThrow(NotFoundException);
     });
   });
 });

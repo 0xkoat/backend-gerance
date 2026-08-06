@@ -6,6 +6,8 @@ import type {
   UnifiedEvent,
   SoarExecutionPayload,
   DfirIncidentPayload,
+  RecordAssignedPayload,
+  RecordStatusChangedPayload,
   BaseQueryFilters,
 } from '../common/security-module/types';
 import type { AssetFeedEntry } from '../generated/prisma/client';
@@ -16,7 +18,11 @@ export class AssetService {
 
   @OnEvent('edr.detection.created')
   async handleEdrDetection(event: UnifiedEvent): Promise<void> {
-    const data = event.data as { hostname: string; detectionName: string; detectionId: string };
+    const data = event.data as {
+      hostname: string;
+      detectionName: string;
+      detectionId: string;
+    };
 
     await this.prisma.assetFeedEntry.create({
       data: {
@@ -24,6 +30,8 @@ export class AssetService {
         source: ModuleName.EDR,
         type: 'detection',
         severity: event.severity,
+        status: 'OPEN',
+        assignedToUserId: null,
         timestamp: event.timestamp,
         summary: `${data.detectionName} on ${data.hostname}`,
         sourceId: data.detectionId,
@@ -41,6 +49,8 @@ export class AssetService {
         source: ModuleName.SIEM,
         type: 'alert',
         severity: event.severity,
+        status: 'OPEN',
+        assignedToUserId: null,
         timestamp: event.timestamp,
         summary: data.title,
         sourceId: data.alertId,
@@ -73,6 +83,8 @@ export class AssetService {
         source: ModuleName.VM,
         type: 'vulnerability',
         severity: event.severity,
+        status: 'OPEN',
+        assignedToUserId: null,
         timestamp: event.timestamp,
         summary: data.description,
         sourceId: data.vulnerabilityId,
@@ -105,6 +117,8 @@ export class AssetService {
         source: ModuleName.DFIR,
         type: 'incident',
         severity: payload.severity,
+        status: 'OPEN',
+        assignedToUserId: null,
         timestamp: payload.timestamp,
         summary: payload.title,
         sourceId: payload.incidentId,
@@ -112,7 +126,88 @@ export class AssetService {
     });
   }
 
-  async getUnifiedFeed(tenantId: string, filters: BaseQueryFilters): Promise<AssetFeedEntry[]> { 
+  // One handler per module for each of the two update event shapes, rather
+  // than a single generic listener — @OnEvent's event name has to be a
+  // literal string, so there's no way to subscribe once and branch on
+  // source. Each just forwards to the same shared update.
+  @OnEvent('siem.alert.assigned')
+  async handleSiemAlertAssigned(payload: RecordAssignedPayload): Promise<void> {
+    await this.applyAssignment(payload);
+  }
+
+  @OnEvent('siem.alert.status_changed')
+  async handleSiemAlertStatusChanged(
+    payload: RecordStatusChangedPayload,
+  ): Promise<void> {
+    await this.applyStatusChange(payload);
+  }
+
+  @OnEvent('edr.detection.assigned')
+  async handleEdrDetectionAssigned(
+    payload: RecordAssignedPayload,
+  ): Promise<void> {
+    await this.applyAssignment(payload);
+  }
+
+  @OnEvent('edr.detection.status_changed')
+  async handleEdrDetectionStatusChanged(
+    payload: RecordStatusChangedPayload,
+  ): Promise<void> {
+    await this.applyStatusChange(payload);
+  }
+
+  @OnEvent('dfir.incident.assigned')
+  async handleDfirIncidentAssigned(
+    payload: RecordAssignedPayload,
+  ): Promise<void> {
+    await this.applyAssignment(payload);
+  }
+
+  @OnEvent('dfir.incident.status_changed')
+  async handleDfirIncidentStatusChanged(
+    payload: RecordStatusChangedPayload,
+  ): Promise<void> {
+    await this.applyStatusChange(payload);
+  }
+
+  @OnEvent('vm.vulnerability.assigned')
+  async handleVmVulnerabilityAssigned(
+    payload: RecordAssignedPayload,
+  ): Promise<void> {
+    await this.applyAssignment(payload);
+  }
+
+  private async applyAssignment(payload: RecordAssignedPayload): Promise<void> {
+    await this.prisma.assetFeedEntry.updateMany({
+      where: {
+        tenantId: payload.tenantId,
+        source: payload.source,
+        sourceId: payload.recordId,
+      },
+      data: {
+        status: payload.status,
+        assignedToUserId: payload.assignedToUserId,
+      },
+    });
+  }
+
+  private async applyStatusChange(
+    payload: RecordStatusChangedPayload,
+  ): Promise<void> {
+    await this.prisma.assetFeedEntry.updateMany({
+      where: {
+        tenantId: payload.tenantId,
+        source: payload.source,
+        sourceId: payload.recordId,
+      },
+      data: { status: payload.status },
+    });
+  }
+
+  async getUnifiedFeed(
+    tenantId: string,
+    filters: BaseQueryFilters,
+  ): Promise<AssetFeedEntry[]> {
     return await this.prisma.assetFeedEntry.findMany({
       orderBy: { timestamp: 'desc' },
       where: {

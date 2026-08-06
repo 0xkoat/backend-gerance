@@ -314,6 +314,110 @@ blocked on external access that doesn't exist yet, not backend effort).
   lockout and reuse-rejection cases in `test/auth.e2e-spec.ts` and `test/users.e2e-spec.ts`),
   and live against the real dev server + Postgres as described above.
 
+# Modules: assign / escalate / resolve workflow (added 2026-08-06)
+
+Not applied uniformly to all six modules — a deliberate, discussed scope decision, not an
+oversight. SIEM, EDR, and DFIR are genuine investigation objects (alerts/detections/incidents
+that an analyst is assigned to, works, and closes out) and got the full workflow. CTI (`CtiIoc`)
+is reference/threat-intel data, not an incident — it gets looked up and matched, never
+"resolved" — so it was deliberately left alone. SOAR (`SoarExecution`) is an automated action
+log, already terminal (PENDING/RUNNING/SUCCESS/FAILED) by the time a human looks at it — nothing
+to assign. VM (`VmVulnerability`) got only `assignedToUserId`, kept orthogonal to its existing
+remediation lifecycle (OPEN/REMEDIATED/ACCEPTED_RISK) rather than forced into the same
+OPEN/ASSIGNED/ESCALATED/RESOLVED shape as the other three — "who's working this" and "what's the
+remediation outcome" are different questions for a vulnerability, and assigning someone doesn't
+by itself move the remediation needle.
+
+- **Shared RBAC logic, not tripled**: `src/common/assignment.ts` — `resolveAssignee(prisma,
+  caller, tenantId, requestedAssigneeId)` (Admin can assign to any Analyst/Admin in their own
+  tenant, verified against the DB; an Analyst can only self-assign, rejected with
+  `ForbiddenException` otherwise) and `assertCanTransitionStatus(caller, assignedToUserId)`
+  (only the current assignee or an Admin may escalate/resolve). Reused by SIEM/EDR/DFIR/VM's
+  services — same reasoning as the `requireTenantId` extraction.
+- **One loose endpoint split into two purpose-built actions, everywhere it's built.** This
+  closed a real, pre-existing gap in SIEM specifically: its original single `PATCH
+  /siem/alerts/:id` accepted both `status` and `assignedToUserId` in one body with no rules at
+  all — any Analyst/Admin could set an arbitrary assignee or jump an alert straight from OPEN to
+  RESOLVED without it ever being assigned. Now: `POST .../:id/assign` (sets the assignee, moves
+  status to ASSIGNED/INVESTIGATING) and `PATCH .../:id/status` (ESCALATED/RESOLVED/CONTAINED
+  only — OPEN and the "assigned" state are never directly settable through it), gated by the
+  shared RBAC helpers above and a per-module "must currently be assigned" state check.
+- **DFIR's status enum grew from 4 to 5 values** (`OPEN, INVESTIGATING, ESCALATED, CONTAINED,
+  RESOLVED` — added `ESCALATED`) rather than being collapsed onto SIEM/EDR's plain
+  OPEN/ASSIGNED/ESCALATED/RESOLVED shape, since DFIR's richer incident-response semantics
+  (INVESTIGATING, CONTAINED) predate this feature and are worth keeping. Assign moves
+  OPEN→INVESTIGATING; the tightened status route accepts ESCALATED, CONTAINED, or RESOLVED, all
+  gated the same way as SIEM/EDR.
+- **`description String?` and `mitreTechniques String[]` added to `SiemAlert`, `EdrDetection`,
+  and `DfirIncident`** — the two fields that turn a bare title into something that reads like a
+  real incident (this is what the original screenshot comparison was asking for). Native Postgres
+  string array for `mitreTechniques`, no join table — sufficient for the current scale.
+- **Seed script enriched to match** (`prisma/seed-modules.ts`): every SIEM alert title, EDR
+  detection name, and DFIR incident title now has a matched narrative `describe()` template
+  referencing the specific seeded host/IP it fired against, plus a plausible MITRE ATT&CK
+  technique list — not `faker.hacker.*` gibberish. ~50% of records across all four modules are
+  seeded pre-assigned (with a consistent status — e.g. never `RESOLVED` while `assignedToUserId`
+  is `null`, which the old purely-random status picker could previously produce, an inconsistent
+  state the new business rules would now reject via the API). Verified for real against the dev
+  DB, not just "it ran": queried freshly-seeded rows directly and confirmed populated
+  `description`/`mitreTechniques`; a `null`-description row found during a naive first check
+  turned out to be stale data from an earlier, pre-this-feature seed run in the same dev
+  database, confirmed by counting `SiemAlert` rows with a non-null description (225 — exactly 5
+  tenants × 45 alerts/tenant from this run) against the total (480, the rest pre-dating the
+  columns).
+- **Deliberately not built here, tracked as a follow-up**: the investigation-timeline and
+  persisted response-task-checklist pieces from the original screenshot comparison. DFIR already
+  has an equivalent (`DfirLink` + `getIncidentDetail`); SIEM/EDR don't, and building a real
+  timeline sub-model plus a persisted, individually-assignable task checklist is a materially
+  bigger lift than the columns above — explicitly deferred, not forgotten.
+- Verified three ways: full unit + e2e suites (384 unit / 150 e2e passing, including new
+  `src/common/assignment.spec.ts` plus assign/status test blocks across all four modules' unit
+  and e2e specs), and live against the real dev server + Postgres — walked the full SIEM chain
+  (self-assign → a non-assignee Analyst correctly blocked with 403 → the assignee escalates →
+  an Admin resolves), confirmed EDR/DFIR/VM's assign routes independently, and confirmed VM's
+  assignment genuinely doesn't touch its remediation `status` field.
+
+## Follow-up: assign/status changes are now observable, not just correct (2026-08-06)
+
+Found during a deliberate "is the backend actually done" pass, not during the original build:
+the assign/escalate/resolve actions above wrote the correct data, but nothing else in the system
+could see the change happen. `EventsService`'s SSE stream only ever subscribed to `*.created`
+events, and the materialized `AssetFeedEntry` table had no `status`/`assignedToUserId` columns at
+all — a record could be assigned and resolved and both the live stream and the unified feed would
+keep showing it exactly as it looked the moment it was created. This was true of the *existing*
+CTI-severity-escalation path too (never fixed until now), not just the new workflow.
+
+- Every assign method (`assignAlert`, `assignDetection`, `assignIncident`, `assignVulnerability`)
+  now emits `<module>.<record>.assigned`; every status-transition method
+  (`updateAlertStatus`/`updateDetectionStatus`/`updateStatus`) emits
+  `<module>.<record>.status_changed`. VM only gets the former, consistent with the original
+  scope decision (no status-transition action was built for VM). Shared payload shapes
+  (`RecordAssignedPayload`/`RecordStatusChangedPayload`) live in
+  `src/common/security-module/types.ts`.
+- `AssetFeedEntry` gained `status String?` and `assignedToUserId String? @db.Uuid`. The six
+  `*.created` listeners in `AssetService` now stamp `status: 'OPEN', assignedToUserId: null` at
+  creation (CTI and SOAR excluded — neither has an assignable status, matching the original
+  workflow-scope decision); seven new listeners (`applyAssignment`/`applyStatusChange`, one
+  `@OnEvent` per event name since the decorator needs a literal string) update the matching row
+  by `tenantId + source + sourceId` in place — this is a materialized view being kept in sync,
+  not an audit log, so updating beats appending.
+- `EventsService` subscribes to the 7 new event names alongside the existing 6, no other changes
+  to its filtering/mapping logic.
+- Verified live, in one shot, not just via automated tests: opened a real SSE connection with
+  `curl`, then in the same tenant posted an EDR event and walked it through the full chain,
+  self-assigned the resulting SIEM alert, then resolved it — the connected client received the
+  `siem.alert.assigned` and `siem.alert.status_changed` frames in real time, correctly shaped,
+  immediately after the existing `*.created` frames. Separately confirmed against Postgres
+  directly that the corresponding `AssetFeedEntry` row's `status`/`assignedToUserId` matched the
+  final state. (Two earlier live-capture attempts came back empty — a tooling artifact from
+  splitting the SSE listener and the trigger calls across separate shell invocations, which
+  killed the backgrounded `curl` before it could receive anything; not a code defect, resolved
+  by keeping listener + trigger in one shell session.)
+- New test: `test/asset.e2e-spec.ts` — a real HTTP assign then a real HTTP status-change against
+  a live `SiemService`, asserting `GET /assets/feed`'s entry updates after each step, including
+  that resolving doesn't clobber the `assignedToUserId` set by the earlier assign. 391 unit / 151
+  e2e passing.
+
 # API surface & operational hardening
 
 - All routes are served under a global `/api` prefix (`app.setGlobalPrefix('api')` in

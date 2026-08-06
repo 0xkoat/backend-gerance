@@ -5,10 +5,16 @@ import type {
   UnifiedEvent,
   SoarExecutionPayload,
   DfirIncidentPayload,
+  RecordAssignedPayload,
+  RecordStatusChangedPayload,
 } from '../common/security-module/types';
 
 type StreamableEvent =
-  UnifiedEvent | SoarExecutionPayload | DfirIncidentPayload;
+  | UnifiedEvent
+  | SoarExecutionPayload
+  | DfirIncidentPayload
+  | RecordAssignedPayload
+  | RecordStatusChangedPayload;
 
 @Injectable()
 export class EventsService {
@@ -22,6 +28,13 @@ export class EventsService {
       fromEvent(this.eventEmitter, 'dfir.incident.created'),
       fromEvent(this.eventEmitter, 'vm.vulnerability.created'),
       fromEvent(this.eventEmitter, 'cti.ioc.created'),
+      fromEvent(this.eventEmitter, 'siem.alert.assigned'),
+      fromEvent(this.eventEmitter, 'siem.alert.status_changed'),
+      fromEvent(this.eventEmitter, 'edr.detection.assigned'),
+      fromEvent(this.eventEmitter, 'edr.detection.status_changed'),
+      fromEvent(this.eventEmitter, 'dfir.incident.assigned'),
+      fromEvent(this.eventEmitter, 'dfir.incident.status_changed'),
+      fromEvent(this.eventEmitter, 'vm.vulnerability.assigned'),
     ).pipe(
       map((event) => event as StreamableEvent),
       filter((event) => event.tenantId === tenantId),

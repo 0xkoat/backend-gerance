@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { Logger } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Logger } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { EdrService, EdrQueryFilters } from './edr.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -7,8 +7,11 @@ import {
   ModuleName,
   Severity,
   EdrEndpointStatus,
+  EdrDetectionStatus,
+  UserRole,
 } from '../generated/prisma/enums';
 import { UnifiedEvent } from '../common/security-module/types';
+import type { AuthenticatedUser } from '../auth/jwt.strategy';
 
 const mockPrismaService = {
   edrEndpoint: {
@@ -19,12 +22,27 @@ const mockPrismaService = {
     create: jest.fn(),
     findMany: jest.fn(),
     findFirst: jest.fn(),
+    findUnique: jest.fn(),
+    update: jest.fn(),
+  },
+  user: {
+    findFirst: jest.fn(),
   },
 };
 
 const mockEventEmitter = {
   emit: jest.fn(),
 };
+
+function authUser(overrides: Partial<AuthenticatedUser>): AuthenticatedUser {
+  return {
+    userId: 'caller-1',
+    role: UserRole.ANALYST,
+    tenantId: 'tenant-1',
+    mustChangePassword: false,
+    ...overrides,
+  };
+}
 
 describe('EdrService', () => {
   let service: EdrService;
@@ -236,6 +254,140 @@ describe('EdrService', () => {
         where: { tenantId: 'tenant-1' },
         orderBy: { lastSeen: 'desc' },
       });
+    });
+  });
+
+  describe('assignDetection', () => {
+    const existing = {
+      id: 'detection-1',
+      tenantId: 'tenant-1',
+      status: EdrDetectionStatus.OPEN,
+      assignedToUserId: null,
+    };
+
+    it('lets an Analyst self-assign, moving status to ASSIGNED', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-1' });
+      mockPrismaService.edrDetection.findUnique.mockResolvedValue(existing);
+      mockPrismaService.edrDetection.update.mockResolvedValue({
+        ...existing,
+        status: EdrDetectionStatus.ASSIGNED,
+        assignedToUserId: 'analyst-1',
+      });
+
+      const result = await service.assignDetection(
+        'tenant-1',
+        'detection-1',
+        caller,
+        undefined,
+      );
+
+      expect(result.status).toBe(EdrDetectionStatus.ASSIGNED);
+      expect(mockPrismaService.edrDetection.update).toHaveBeenCalledWith({
+        where: { id: 'detection-1' },
+        data: {
+          assignedToUserId: 'analyst-1',
+          status: EdrDetectionStatus.ASSIGNED,
+        },
+      });
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+        'edr.detection.assigned',
+        expect.objectContaining({
+          tenantId: 'tenant-1',
+          source: ModuleName.EDR,
+          recordId: 'detection-1',
+          assignedToUserId: 'analyst-1',
+          status: EdrDetectionStatus.ASSIGNED,
+        }),
+      );
+    });
+
+    it('rejects an Analyst trying to assign someone else', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-1' });
+      mockPrismaService.edrDetection.findUnique.mockResolvedValue(existing);
+
+      await expect(
+        service.assignDetection('tenant-1', 'detection-1', caller, 'analyst-2'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrismaService.edrDetection.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the detection does not exist', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.edrDetection.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.assignDetection('tenant-1', 'missing-id', caller, 'analyst-1'),
+      ).rejects.toThrow('Detection not found');
+    });
+  });
+
+  describe('updateDetectionStatus', () => {
+    const assigned = {
+      id: 'detection-1',
+      tenantId: 'tenant-1',
+      status: EdrDetectionStatus.ASSIGNED,
+      assignedToUserId: 'analyst-1',
+    };
+
+    it('lets the assigned Analyst resolve the detection', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-1' });
+      mockPrismaService.edrDetection.findUnique.mockResolvedValue(assigned);
+      mockPrismaService.edrDetection.update.mockResolvedValue({
+        ...assigned,
+        status: EdrDetectionStatus.RESOLVED,
+      });
+
+      const result = await service.updateDetectionStatus(
+        'tenant-1',
+        'detection-1',
+        caller,
+        EdrDetectionStatus.RESOLVED,
+      );
+
+      expect(result.status).toBe(EdrDetectionStatus.RESOLVED);
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+        'edr.detection.status_changed',
+        expect.objectContaining({
+          tenantId: 'tenant-1',
+          source: ModuleName.EDR,
+          recordId: 'detection-1',
+          status: EdrDetectionStatus.RESOLVED,
+        }),
+      );
+    });
+
+    it('rejects an Analyst who is not the assignee', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-2' });
+      mockPrismaService.edrDetection.findUnique.mockResolvedValue(assigned);
+
+      await expect(
+        service.updateDetectionStatus(
+          'tenant-1',
+          'detection-1',
+          caller,
+          EdrDetectionStatus.RESOLVED,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrismaService.edrDetection.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects transitioning a detection that has never been assigned', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.edrDetection.findUnique.mockResolvedValue({
+        ...assigned,
+        status: EdrDetectionStatus.OPEN,
+        assignedToUserId: null,
+      });
+
+      await expect(
+        service.updateDetectionStatus(
+          'tenant-1',
+          'detection-1',
+          caller,
+          EdrDetectionStatus.RESOLVED,
+        ),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.edrDetection.update).not.toHaveBeenCalled();
     });
   });
 });

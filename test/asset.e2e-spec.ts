@@ -46,6 +46,16 @@ const viewerUser: FakeUser = {
   mustChangePassword: false,
 };
 
+const analystUser: FakeUser = {
+  id: 'analyst-1',
+  email: 'analyst@x.com',
+  name: 'Analyst',
+  phoneNumber: '+21612345679',
+  role: UserRole.ANALYST,
+  tenantId: 'tenant-1',
+  mustChangePassword: false,
+};
+
 const noTenantAdminUser: FakeUser = {
   id: 'admin-no-tenant',
   email: 'admin-no-tenant@x.com',
@@ -60,6 +70,7 @@ const usersByEmail: Record<string, FakeUser> = {
   [adminUser.email]: adminUser,
   [viewerUser.email]: viewerUser,
   [noTenantAdminUser.email]: noTenantAdminUser,
+  [analystUser.email]: analystUser,
 };
 
 describe('AssetController (e2e)', () => {
@@ -105,7 +116,9 @@ describe('AssetController (e2e)', () => {
       .useValue({
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
-        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
+        refreshToken: {
+          create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+        },
       })
       .compile();
 
@@ -145,9 +158,7 @@ describe('AssetController (e2e)', () => {
     });
 
     it('rejects a request with no token', () => {
-      return request(app.getHttpServer())
-        .get('/api/assets/feed')
-        .expect(401);
+      return request(app.getHttpServer()).get('/api/assets/feed').expect(401);
     });
 
     it('rejects a caller with no tenant', async () => {
@@ -242,6 +253,27 @@ describe('EDR -> SIEM -> CTI -> SOAR -> DFIR -> Asset feed integration (e2e, ful
             return Promise.resolve({ count });
           },
         ),
+      update: jest
+        .fn()
+        .mockImplementation(
+          ({
+            where,
+            data,
+          }: {
+            where: { id: string };
+            data: Record<string, unknown>;
+          }) => {
+            let updated: Record<string, unknown> | undefined;
+            siemAlerts = siemAlerts.map((a) => {
+              if (a.id === where.id) {
+                updated = { ...a, ...data };
+                return updated;
+              }
+              return a;
+            });
+            return Promise.resolve(updated);
+          },
+        ),
     },
     ctiIoc: {
       upsert: jest
@@ -267,29 +299,27 @@ describe('EDR -> SIEM -> CTI -> SOAR -> DFIR -> Asset feed integration (e2e, ful
               ) ?? null,
             ),
         ),
-      findUnique: jest
-        .fn()
-        .mockImplementation(
-          ({
-            where,
-          }: {
-            where: {
-              tenantId_type_value: {
-                tenantId: string;
-                type: string;
-                value: string;
-              };
+      findUnique: jest.fn().mockImplementation(
+        ({
+          where,
+        }: {
+          where: {
+            tenantId_type_value: {
+              tenantId: string;
+              type: string;
+              value: string;
             };
-          }) =>
-            Promise.resolve(
-              ctiIocs.find(
-                (i) =>
-                  i.tenantId === where.tenantId_type_value.tenantId &&
-                  i.type === where.tenantId_type_value.type &&
-                  i.value === where.tenantId_type_value.value,
-              ) ?? null,
-            ),
-        ),
+          };
+        }) =>
+          Promise.resolve(
+            ctiIocs.find(
+              (i) =>
+                i.tenantId === where.tenantId_type_value.tenantId &&
+                i.type === where.tenantId_type_value.type &&
+                i.value === where.tenantId_type_value.value,
+            ) ?? null,
+          ),
+      ),
     },
     soarPlaybook: {
       create: jest
@@ -432,6 +462,31 @@ describe('EDR -> SIEM -> CTI -> SOAR -> DFIR -> Asset feed integration (e2e, ful
           return Promise.resolve(results.slice(skip, skip + take));
         },
       ),
+      updateMany: jest
+        .fn()
+        .mockImplementation(
+          ({
+            where,
+            data,
+          }: {
+            where: { tenantId: string; source: ModuleName; sourceId: string };
+            data: Record<string, unknown>;
+          }) => {
+            let count = 0;
+            assetFeedEntries = assetFeedEntries.map((e) => {
+              if (
+                e.tenantId === where.tenantId &&
+                e.source === where.source &&
+                e.sourceId === where.sourceId
+              ) {
+                count += 1;
+                return { ...e, ...data };
+              }
+              return e;
+            });
+            return Promise.resolve({ count });
+          },
+        ),
     },
   };
 
@@ -473,7 +528,9 @@ describe('EDR -> SIEM -> CTI -> SOAR -> DFIR -> Asset feed integration (e2e, ful
         ...statefulPrisma,
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
-        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
+        refreshToken: {
+          create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+        },
       })
       .compile();
 
@@ -609,5 +666,88 @@ describe('EDR -> SIEM -> CTI -> SOAR -> DFIR -> Asset feed integration (e2e, ful
     expect(feed.map((entry) => entry.source).sort()).toEqual(
       [ModuleName.EDR, ModuleName.SIEM].sort(),
     );
+  });
+
+  it('assigning and resolving a SIEM alert updates its feed entry in place, not just the alert itself', async () => {
+    const adminToken = await loginAs(adminUser.email);
+
+    await request(app.getHttpServer())
+      .post('/api/edr/events')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        hostname: 'web-server-1',
+        ip: '10.0.0.5',
+        os: 'Ubuntu 24.04',
+        detectionName: 'Suspicious PowerShell execution chain',
+        severity: Severity.HIGH,
+      })
+      .expect(201);
+
+    const alertId = siemAlerts[0].id as string;
+
+    const feedBeforeAssign = (
+      await request(app.getHttpServer())
+        .get('/api/assets/feed')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200)
+    ).body as Array<{
+      source: ModuleName;
+      sourceId: string;
+      status: string | null;
+      assignedToUserId: string | null;
+    }>;
+    const siemEntryBefore = feedBeforeAssign.find(
+      (e) => e.source === ModuleName.SIEM && e.sourceId === alertId,
+    );
+    expect(siemEntryBefore?.status).toBe('OPEN');
+    expect(siemEntryBefore?.assignedToUserId).toBeNull();
+
+    const analystToken = await loginAs(analystUser.email);
+    await request(app.getHttpServer())
+      .post(`/api/siem/alerts/${alertId}/assign`)
+      .set('Authorization', `Bearer ${analystToken}`)
+      .send({})
+      .expect(201);
+
+    const feedAfterAssign = (
+      await request(app.getHttpServer())
+        .get('/api/assets/feed')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200)
+    ).body as Array<{
+      source: ModuleName;
+      sourceId: string;
+      status: string | null;
+      assignedToUserId: string | null;
+    }>;
+    const siemEntryAfterAssign = feedAfterAssign.find(
+      (e) => e.source === ModuleName.SIEM && e.sourceId === alertId,
+    );
+    expect(siemEntryAfterAssign?.status).toBe('ASSIGNED');
+    expect(siemEntryAfterAssign?.assignedToUserId).toBe(analystUser.id);
+
+    await request(app.getHttpServer())
+      .patch(`/api/siem/alerts/${alertId}/status`)
+      .set('Authorization', `Bearer ${analystToken}`)
+      .send({ status: 'RESOLVED' })
+      .expect(200);
+
+    const feedAfterResolve = (
+      await request(app.getHttpServer())
+        .get('/api/assets/feed')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .expect(200)
+    ).body as Array<{
+      source: ModuleName;
+      sourceId: string;
+      status: string | null;
+      assignedToUserId: string | null;
+    }>;
+    const siemEntryAfterResolve = feedAfterResolve.find(
+      (e) => e.source === ModuleName.SIEM && e.sourceId === alertId,
+    );
+    expect(siemEntryAfterResolve?.status).toBe('RESOLVED');
+    // The assignee is untouched by the status-only transition.
+    expect(siemEntryAfterResolve?.assignedToUserId).toBe(analystUser.id);
   });
 });

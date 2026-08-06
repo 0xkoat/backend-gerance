@@ -18,6 +18,7 @@ import { UserRole, ModuleName } from '../generated/prisma/enums';
 import { VmService } from './vm.service';
 import { UnifiedEvent } from '../common/security-module/types';
 import { requireTenantId } from '../common/require-tenant-id';
+import { AssignDto } from '../common/dto/assign.dto';
 
 @Controller('vm')
 export class VmController {
@@ -60,6 +61,22 @@ export class VmController {
       tenantId,
       id,
       updateVulnerabilityStatusDto.status,
+    );
+  }
+
+  @Post('vulnerabilities/:id/assign')
+  @Roles(UserRole.ADMIN, UserRole.ANALYST)
+  async assignVulnerability(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() assignDto: AssignDto,
+  ) {
+    const tenantId = requireTenantId(user);
+    return this.vmService.assignVulnerability(
+      tenantId,
+      id,
+      user,
+      assignDto.assignedToUserId,
     );
   }
 

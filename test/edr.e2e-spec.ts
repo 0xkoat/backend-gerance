@@ -11,6 +11,7 @@ import {
   ModuleName,
   Severity,
   UserRole,
+  EdrDetectionStatus,
 } from './../src/generated/prisma/enums';
 
 describe('EdrController (e2e)', () => {
@@ -83,6 +84,8 @@ describe('EdrController (e2e)', () => {
   const mockEdrService = {
     listEndpoints: jest.fn(),
     query: jest.fn(),
+    assignDetection: jest.fn(),
+    updateDetectionStatus: jest.fn(),
     ingest: jest.fn(),
   };
 
@@ -117,7 +120,9 @@ describe('EdrController (e2e)', () => {
       .useValue({
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
-        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
+        refreshToken: {
+          create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+        },
       })
       .compile();
 
@@ -193,6 +198,85 @@ describe('EdrController (e2e)', () => {
         .get('/api/edr/detections?severity=NOT_A_SEVERITY')
         .set('Authorization', `Bearer ${token}`)
         .expect(400);
+    });
+  });
+
+  describe('POST /edr/detections/:id/assign', () => {
+    it('allows an Analyst to self-assign', async () => {
+      const token = await loginAs(analystUser.email);
+      mockEdrService.assignDetection.mockResolvedValue({
+        id: 'detection-1',
+        status: EdrDetectionStatus.ASSIGNED,
+      });
+
+      await request(app.getHttpServer())
+        .post('/api/edr/detections/detection-1/assign')
+        .set('Authorization', `Bearer ${token}`)
+        .send({})
+        .expect(201);
+
+      expect(mockEdrService.assignDetection).toHaveBeenCalledWith(
+        'tenant-1',
+        'detection-1',
+        expect.objectContaining({ role: UserRole.ANALYST }),
+        undefined,
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .post('/api/edr/detections/detection-1/assign')
+        .set('Authorization', `Bearer ${token}`)
+        .send({})
+        .expect(403);
+      expect(mockEdrService.assignDetection).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('PATCH /edr/detections/:id/status', () => {
+    it('allows an Analyst to update detection status', async () => {
+      const token = await loginAs(analystUser.email);
+      mockEdrService.updateDetectionStatus.mockResolvedValue({
+        id: 'detection-1',
+        status: EdrDetectionStatus.RESOLVED,
+      });
+
+      await request(app.getHttpServer())
+        .patch('/api/edr/detections/detection-1/status')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ status: EdrDetectionStatus.RESOLVED })
+        .expect(200);
+
+      expect(mockEdrService.updateDetectionStatus).toHaveBeenCalledWith(
+        'tenant-1',
+        'detection-1',
+        expect.objectContaining({ role: UserRole.ANALYST }),
+        EdrDetectionStatus.RESOLVED,
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .patch('/api/edr/detections/detection-1/status')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ status: EdrDetectionStatus.RESOLVED })
+        .expect(403);
+      expect(mockEdrService.updateDetectionStatus).not.toHaveBeenCalled();
+    });
+
+    it('rejects a status value other than ESCALATED/RESOLVED', async () => {
+      const token = await loginAs(analystUser.email);
+
+      await request(app.getHttpServer())
+        .patch('/api/edr/detections/detection-1/status')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ status: EdrDetectionStatus.ASSIGNED })
+        .expect(400);
+      expect(mockEdrService.updateDetectionStatus).not.toHaveBeenCalled();
     });
   });
 

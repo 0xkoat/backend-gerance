@@ -58,3 +58,26 @@ export interface RawRecord {
   severity: Severity;
   data: Record<string, unknown>;
 }
+
+// Fired by every module's assign action — lets the SSE stream and the
+// materialized asset feed reflect "who's working this" without either one
+// needing to know each module's own record shape.
+export interface RecordAssignedPayload {
+  tenantId: string;
+  source: ModuleName;
+  recordId: string;
+  assignedToUserId: string;
+  status: string;
+  timestamp: Date;
+}
+
+// Fired by every module's escalate/resolve-class status action. Not fired
+// by ingest() itself — a record's initial status is always its schema
+// default, assumed OPEN by every listener rather than carried in an event.
+export interface RecordStatusChangedPayload {
+  tenantId: string;
+  source: ModuleName;
+  recordId: string;
+  status: string;
+  timestamp: Date;
+}

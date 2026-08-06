@@ -72,6 +72,13 @@ describe('EventsService', () => {
         'dfir.incident.created',
         'vm.vulnerability.created',
         'cti.ioc.created',
+        'siem.alert.assigned',
+        'siem.alert.status_changed',
+        'edr.detection.assigned',
+        'edr.detection.status_changed',
+        'dfir.incident.assigned',
+        'dfir.incident.status_changed',
+        'vm.vulnerability.assigned',
       ];
       eventNames.forEach((name) =>
         eventEmitter.emit(name, { tenantId: 'tenant-1' }),

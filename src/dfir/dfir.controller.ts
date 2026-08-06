@@ -16,6 +16,7 @@ import { UpdateDfirIncidentStatusDto } from './dto/updateDfirIncidentStatus.dto'
 import { CreateDfirLinkDto } from './dto/createDfirLink.dto';
 import { DfirQueryDto } from './dto/dfirQuery.dto';
 import { requireTenantId } from '../common/require-tenant-id';
+import { AssignDto } from '../common/dto/assign.dto';
 
 @Controller('dfir')
 export class DfirController {
@@ -39,7 +40,23 @@ export class DfirController {
     return this.dfirService.getIncidentDetail(tenantId, id);
   }
 
-  @Patch('incidents/:id')
+  @Post('incidents/:id/assign')
+  @Roles(UserRole.ADMIN, UserRole.ANALYST)
+  async assignIncident(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() assignDto: AssignDto,
+  ) {
+    const tenantId = requireTenantId(user);
+    return this.dfirService.assignIncident(
+      tenantId,
+      id,
+      user,
+      assignDto.assignedToUserId,
+    );
+  }
+
+  @Patch('incidents/:id/status')
   @Roles(UserRole.ADMIN, UserRole.ANALYST)
   async updateStatus(
     @CurrentUser() user: AuthenticatedUser,
@@ -50,6 +67,7 @@ export class DfirController {
     return this.dfirService.updateStatus(
       tenantId,
       id,
+      user,
       updateDfirIncidentStatusDto.status,
     );
   }
