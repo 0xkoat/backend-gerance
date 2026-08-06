@@ -478,6 +478,15 @@ describe('EDR -> SIEM -> CTI -> SOAR integration (e2e, real event chain)', () =>
             soarExecutions.filter((e) => e.tenantId === where.tenantId),
           ),
         ),
+      // Backs DfirService.linkRecord's per-sourceType tenant-ownership check
+      // for SOAR_EXECUTION links, same reasoning as the comment below.
+      findUnique: jest
+        .fn()
+        .mockImplementation(({ where }: { where: { id: string } }) =>
+          Promise.resolve(
+            soarExecutions.find((e) => e.id === where.id) ?? null,
+          ),
+        ),
     },
     // Stubs below exist only so DFIR's real @OnEvent listener (also wired
     // globally via AppModule) doesn't throw when this suite's
