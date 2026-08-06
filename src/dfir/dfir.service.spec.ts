@@ -37,6 +37,21 @@ const mockPrismaService = {
   siemAlert: {
     findUnique: jest.fn(),
   },
+  siemLog: {
+    findUnique: jest.fn(),
+  },
+  edrDetection: {
+    findUnique: jest.fn(),
+  },
+  vmVulnerability: {
+    findUnique: jest.fn(),
+  },
+  ctiIoc: {
+    findUnique: jest.fn(),
+  },
+  soarExecution: {
+    findUnique: jest.fn(),
+  },
   user: {
     findFirst: jest.fn(),
   },
@@ -85,6 +100,12 @@ describe('DfirService', () => {
       });
       mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
         id: 'incident-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.siemAlert.findUnique.mockResolvedValue({
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.soarExecution.findUnique.mockResolvedValue({
         tenantId: 'tenant-1',
       });
       mockPrismaService.dfirLink.create.mockResolvedValue({ id: 'link-1' });
@@ -164,9 +185,12 @@ describe('DfirService', () => {
   });
 
   describe('linkRecord', () => {
-    it('creates a link when the incident belongs to the tenant', async () => {
+    it('creates a link when the incident and the source record both belong to the tenant', async () => {
       mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
         id: 'incident-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.ctiIoc.findUnique.mockResolvedValue({
         tenantId: 'tenant-1',
       });
       mockPrismaService.dfirLink.create.mockResolvedValue({ id: 'link-1' });
@@ -179,6 +203,10 @@ describe('DfirService', () => {
       );
 
       expect(result).toEqual({ id: 'link-1' });
+      expect(mockPrismaService.ctiIoc.findUnique).toHaveBeenCalledWith({
+        where: { id: 'ioc-1' },
+        select: { tenantId: true },
+      });
       expect(mockPrismaService.dfirLink.create).toHaveBeenCalledWith({
         data: {
           tenantId: 'tenant-1',
@@ -219,6 +247,76 @@ describe('DfirService', () => {
       ).rejects.toThrow(NotFoundException);
       expect(mockPrismaService.dfirLink.create).not.toHaveBeenCalled();
     });
+
+    // Regression test for a live-verified cross-tenant finding: linkRecord
+    // previously created the DfirLink with no check at all on whether
+    // sourceId actually belonged to the caller's tenant (or existed at all),
+    // since DfirLink has no FK on it by design.
+    it('throws NotFoundException when the source record belongs to a different tenant', async () => {
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
+        id: 'incident-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.siemAlert.findUnique.mockResolvedValue({
+        tenantId: 'tenant-2',
+      });
+
+      await expect(
+        service.linkRecord(
+          'tenant-1',
+          'incident-1',
+          DfirLinkSourceType.SIEM_ALERT,
+          'other-tenants-alert',
+        ),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.dfirLink.create).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the source record does not exist', async () => {
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
+        id: 'incident-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.edrDetection.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.linkRecord(
+          'tenant-1',
+          'incident-1',
+          DfirLinkSourceType.EDR_DETECTION,
+          'nonexistent',
+        ),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.dfirLink.create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [DfirLinkSourceType.SIEM_ALERT, 'siemAlert'] as const,
+      [DfirLinkSourceType.SIEM_LOG, 'siemLog'] as const,
+      [DfirLinkSourceType.EDR_DETECTION, 'edrDetection'] as const,
+      [DfirLinkSourceType.VM_VULNERABILITY, 'vmVulnerability'] as const,
+      [DfirLinkSourceType.CTI_IOC, 'ctiIoc'] as const,
+      [DfirLinkSourceType.SOAR_EXECUTION, 'soarExecution'] as const,
+    ])(
+      'checks the %s record against the right table (%s)',
+      async (sourceType, delegate) => {
+        mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
+          id: 'incident-1',
+          tenantId: 'tenant-1',
+        });
+        mockPrismaService[delegate].findUnique.mockResolvedValue({
+          tenantId: 'tenant-1',
+        });
+        mockPrismaService.dfirLink.create.mockResolvedValue({ id: 'link-1' });
+
+        await service.linkRecord('tenant-1', 'incident-1', sourceType, 'src-1');
+
+        expect(mockPrismaService[delegate].findUnique).toHaveBeenCalledWith({
+          where: { id: 'src-1' },
+          select: { tenantId: true },
+        });
+      },
+    );
   });
 
   describe('unlinkRecord', () => {
@@ -359,6 +457,9 @@ describe('DfirService', () => {
       });
       mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
         id: 'incident-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.soarExecution.findUnique.mockResolvedValue({
         tenantId: 'tenant-1',
       });
       mockPrismaService.dfirLink.create.mockResolvedValue({ id: 'link-1' });

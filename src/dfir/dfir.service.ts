@@ -111,9 +111,72 @@ export class DfirService implements SecurityModule<
       throw new NotFoundException('Incident not found');
     }
 
+    // DfirLink has no FK on sourceId by design (it's a polymorphic pointer
+    // across six different tables) - which means nothing at the DB layer
+    // stops a caller from linking their own tenant's incident to another
+    // tenant's real record id. Confirmed live: POST .../links with a
+    // cross-tenant sourceId previously succeeded with no rejection. This is
+    // the same tenant-ownership check every other id lookup in this codebase
+    // already does after findUnique, just fanned out per sourceType since
+    // there's no single parent table to check against here.
+    await this.assertSourceRecordInTenant(tenantId, sourceType, sourceId);
+
     return this.prisma.dfirLink.create({
       data: { tenantId, incidentId, sourceType, sourceId },
     });
+  }
+
+  private async assertSourceRecordInTenant(
+    tenantId: string,
+    sourceType: DfirLinkSourceType,
+    sourceId: string,
+  ): Promise<void> {
+    let record: { tenantId: string } | null;
+
+    switch (sourceType) {
+      case DfirLinkSourceType.SIEM_ALERT:
+        record = await this.prisma.siemAlert.findUnique({
+          where: { id: sourceId },
+          select: { tenantId: true },
+        });
+        break;
+      case DfirLinkSourceType.SIEM_LOG:
+        record = await this.prisma.siemLog.findUnique({
+          where: { id: sourceId },
+          select: { tenantId: true },
+        });
+        break;
+      case DfirLinkSourceType.EDR_DETECTION:
+        record = await this.prisma.edrDetection.findUnique({
+          where: { id: sourceId },
+          select: { tenantId: true },
+        });
+        break;
+      case DfirLinkSourceType.VM_VULNERABILITY:
+        record = await this.prisma.vmVulnerability.findUnique({
+          where: { id: sourceId },
+          select: { tenantId: true },
+        });
+        break;
+      case DfirLinkSourceType.CTI_IOC:
+        record = await this.prisma.ctiIoc.findUnique({
+          where: { id: sourceId },
+          select: { tenantId: true },
+        });
+        break;
+      case DfirLinkSourceType.SOAR_EXECUTION:
+        record = await this.prisma.soarExecution.findUnique({
+          where: { id: sourceId },
+          select: { tenantId: true },
+        });
+        break;
+    }
+
+    if (!record || record.tenantId !== tenantId) {
+      throw new NotFoundException(
+        `${sourceType} record not found in this tenant`,
+      );
+    }
   }
 
   // Nothing references DfirLink (it's the leaf of the polymorphic link, not

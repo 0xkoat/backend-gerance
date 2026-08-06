@@ -542,6 +542,15 @@ describe('EDR -> SIEM -> CTI -> SOAR -> DFIR integration (e2e, full chain)', () 
             soarExecutions.filter((e) => e.tenantId === where.tenantId),
           ),
         ),
+      // Backs DfirService.linkRecord's per-sourceType tenant-ownership check
+      // for SOAR_EXECUTION links, same reasoning as siemAlert.findUnique above.
+      findUnique: jest
+        .fn()
+        .mockImplementation(({ where }: { where: { id: string } }) =>
+          Promise.resolve(
+            soarExecutions.find((e) => e.id === where.id) ?? null,
+          ),
+        ),
     },
     dfirIncident: {
       create: jest
