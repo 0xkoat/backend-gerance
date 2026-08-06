@@ -18,6 +18,7 @@ const mockSiemService = {
   listLogs: jest.fn(),
   query: jest.fn(),
   assignAlert: jest.fn(),
+  unassignAlert: jest.fn(),
   updateAlertStatus: jest.fn(),
   ingest: jest.fn(),
 };
@@ -130,6 +131,29 @@ describe('SiemController', () => {
         controller.assignAlert(noTenantAdmin, 'alert-1', dto),
       ).rejects.toThrow(ForbiddenException);
       expect(mockSiemService.assignAlert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('unassignAlert', () => {
+    it('passes the caller to the service', async () => {
+      const updated = { id: 'alert-1', status: SiemAlertStatus.OPEN };
+      mockSiemService.unassignAlert.mockResolvedValue(updated);
+
+      const result = await controller.unassignAlert(analyst, 'alert-1');
+
+      expect(result).toEqual(updated);
+      expect(mockSiemService.unassignAlert).toHaveBeenCalledWith(
+        'tenant-1',
+        'alert-1',
+        analyst,
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      await expect(
+        controller.unassignAlert(noTenantAdmin, 'alert-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockSiemService.unassignAlert).not.toHaveBeenCalled();
     });
   });
 

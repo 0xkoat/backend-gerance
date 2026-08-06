@@ -418,6 +418,271 @@ CTI-severity-escalation path too (never fixed until now), not just the new workf
   that resolving doesn't clobber the `assignedToUserId` set by the earlier assign. 391 unit / 151
   e2e passing.
 
+## Follow-up: "assigned to me" filter + unassign action (2026-08-06)
+
+Found the same way as the two follow-ups above it — not while building the workflow, but while
+deliberately re-asking "can someone actually use this" afterward. Two concrete gaps: no query
+endpoint (module-level or the unified feed) could filter by `assignedToUserId`, so an Analyst had
+no way to ask the API for just their own open work; and once assigned, a record could only be
+*re*assigned to someone else, never unassigned back to nobody.
+
+- **Filter**: `assignedToUserId?: string` added to `BaseQueryFilters`/`BaseQueryDto` (shared, so
+  every module's query DTO picks it up automatically), wired into SIEM/EDR/DFIR/VM's `query()`
+  where-clauses and `AssetService.getUnifiedFeed`. CTI/SOAR's DTOs also accept the field (it's
+  shared) but their services simply never reference it, since neither model has that column.
+- **Unassign**: `DELETE .../:id/assign` on all four modules (mirrors the existing `POST
+  .../:id/assign`), reusing `assertCanTransitionStatus` for RBAC (only the current assignee or
+  an Admin) and, for SIEM/EDR/DFIR, the same `TRANSITIONABLE_STATUSES` gate the status-transition
+  endpoint already uses — a record can only be unassigned while it's ASSIGNED/INVESTIGATING or
+  ESCALATED, not before it was ever assigned or after it's already RESOLVED/CONTAINED. Unassigning
+  reverts status to OPEN (SIEM/EDR/DFIR); VM just clears `assignedToUserId`, consistent with
+  assignment never touching VM's own remediation status in the first place. Emits
+  `<module>.<record>.unassigned` (reusing the `RecordStatusChangedPayload` shape — no new type
+  needed), consumed by both `EventsService`'s SSE stream and a new `AssetService.applyUnassignment`
+  listener that clears the feed row's `assignedToUserId` alongside its `status`.
+- **One real nuance found live, not glossed over**: a non-Admin Analyst who unassigns something
+  and then immediately retries gets a `403 Forbidden` ("Only the assigned analyst or an Admin can
+  change this status"), not the `409 Conflict` ("must be currently assigned") the state-machine
+  check is meant to produce — because `assertCanTransitionStatus` runs first and already rejects
+  a non-assignee before the state check is ever reached, since after unassigning nobody is the
+  assignee anymore. The end result (the double-unassign is still correctly blocked) is right
+  either way; only the *error message* a non-Admin sees in that specific retry case is less
+  precise than it could be. Confirmed via a real Admin retry on the same record that the intended
+  409 path does fire correctly when an Admin is the one calling it. Left as-is — correct behavior,
+  imprecise message in one edge case, not worth a special-cased fix for the message alone.
+- Verified three ways: full unit + e2e suites (427 unit / 159 e2e passing, including new
+  `unassignAlert`/`unassignDetection`/`unassignIncident`/`unassignVulnerability` describe blocks
+  across all four modules' service, controller, and e2e specs, plus `assignedToUserId` filter
+  tests on all four `query()` methods and `getUnifiedFeed`), and live against the real dev
+  server + Postgres — confirmed the filter empty-before/present-after an assignment on both a
+  module endpoint and the unified feed, confirmed unassign reverts SIEM's status to OPEN and
+  clears the assignee, confirmed the double-unassign rejection (and the message nuance above),
+  and spot-checked DFIR's assign→INVESTIGATING→unassign→OPEN round trip live.
+
+# CTI/SOAR mutability gaps closed + dead-code removal (2026-08-06)
+
+Found the same way as the assign/unassign follow-ups above — a deliberate "what's still
+missing" pass over the whole backend rather than a repeat of an earlier answer. Three
+unrelated, independently-verified fixes, not a single feature:
+
+**1. CTI IOCs and SOAR playbooks were create-only.** Neither model had any update or delete
+route anywhere — confirmed by grep across both services/controllers before writing any code.
+A false-positive IOC or a misconfigured playbook had no API-level fix or removal path, ever.
+- `PATCH /cti/iocs/:id` / `DELETE /cti/iocs/:id` (Analyst/Admin, matching `POST`'s RBAC).
+  `type`/`value` aren't editable — together they're the IOC's identity (the
+  `tenantId_type_value` unique key `ingest()` upserts on); only `confidence`/`source` can
+  change. Delete emits `cti.ioc.deleted` (`RecordDeletedPayload`, a new type — no existing
+  payload shape fit a record that no longer exists to have a status), consumed by both
+  `EventsService`'s SSE stream and a new `AssetService.handleCtiIocDeleted` listener that
+  `deleteMany`s the matching `AssetFeedEntry` row — the one deliberate exception to every
+  other module's "records are never deleted, only status/assignee changes" pattern, since
+  CTI IOCs are the one record kind this pass actually made truly deletable.
+- `SoarPlaybook` gained `isActive Boolean @default(true)`. `PATCH /soar/playbooks/:id` (Admin)
+  edits name/triggerCondition/actions/isActive; `evaluateTriggers`'s `where` clause now filters
+  `isActive: true`, so a deactivated playbook stops firing without needing to be deleted.
+  `DELETE /soar/playbooks/:id` (Admin) hard-deletes — but only once it's confirmed to have zero
+  `SoarExecution` rows (`soarExecution.count({ where: { playbookId } })` up front), otherwise
+  `409 Conflict` pointing at the `isActive` toggle instead. **This was originally written as a
+  try/delete-and-catch-the-FK-violation instead of a pre-check, guessing the thrown error would
+  be a `Prisma.PrismaClientKnownRequestError` with code `P2003`/`P2014` — wrong, confirmed live
+  against the real dev DB.** Under this project's Prisma 7 driver-adapter setup
+  (`@prisma/adapter-pg`, see `docs/internship-report-backend.md` §4.1/§4.11), a RESTRICT
+  violation on `delete()` surfaces as a raw `DriverAdapterError` (`cause.kind ===
+  'ForeignKeyConstraintViolation'`, a Postgres-level error from the adapter), not the
+  higher-level Prisma client error code the non-adapter query engine produces — the try/catch
+  version returned a bare `500` instead of the intended `409` the first time it was actually
+  exercised against a playbook with a real execution. Rewritten to the explicit count-check
+  instead, which sidesteps the whole question of what shape the underlying error takes.
+- **A second, related gap closed in the same pass**: `CreateSoarPlaybookDto.triggerCondition`
+  was validated as `@IsObject()` — any shape accepted. `evaluateTriggers` only ever matches on
+  a literal `severity` key; anything else silently fails every check in its `.every()` loop, so
+  a typo'd key (`severty` instead of `severity`) produced a playbook that could never fire, with
+  no error and no way to tell afterward (compounded by there being no delete/update route at the
+  time this was found). Replaced with a `TriggerConditionDto` (`@IsEnum(Severity) severity`),
+  so the shape is rejected at creation time instead. `actions` deliberately stays a generic
+  object — SOAR execution is fully simulated (module-plan decision 8), so there's no real
+  schema to validate it against.
+
+**2. Removed the default NestJS scaffold that was still live.** `src/app.controller.ts` /
+`src/app.service.ts` (`GET /api` → `"Hello World!"`) and their `test/app.e2e-spec.ts` were the
+literal `nest new` boilerplate, never removed, still wired into `app.module.ts`. Deleting the
+controller/service was clean — but `test/app.e2e-spec.ts` turned out to be load-bearing: past
+the boilerplate route (used only as a convenient "protected, no `@Roles()`" target), it was the
+*only* e2e coverage anywhere for `POST /auth/forgot-password`, helmet response headers, and
+login rate-limiting (`429` after 5 attempts/minute). Deleting it outright would have silently
+dropped that coverage while the suite kept passing — caught before it shipped, not after.
+Recreated as `test/security-hardening.e2e-spec.ts` with the same tests, minus the one assertion
+tied to the removed route (re-targeted at `GET /api/users/me`, an existing route with no
+`@Roles()` restriction). 168 e2e tests, same total as before the rename (11 tests moved, none
+lost).
+
+**3. A fourth, unrelated bug found and reported, not fixed.** While live-testing #1 and #2,
+cleaning up the test tenant hit the exact same class of bug already fixed once in Phase 8 above
+(`deleteTenantWithUsers` missing tables in its dependency-ordered delete) — except for two
+tables added *after* that fix, on the same day, and never retrofitted: `RefreshToken` and
+`PasswordHistory`. See that section's note for the full detail; not addressed here since it's
+unrelated to this pass's actual scope.
+
+- Verified three ways: full unit + e2e suites (447 unit / 168 e2e passing, including new
+  `updateIoc`/`deleteIoc`/`updatePlaybook`/`deletePlaybook` describe blocks across both modules'
+  service/controller specs, the `TriggerConditionDto` rejection case, and the
+  `AssetService.handleCtiIocDeleted` listener test), typecheck and lint clean, and live against
+  the real dev server + Postgres — including a real Prisma-client-regeneration gotcha caught
+  along the way: `npx prisma migrate dev` had applied the `isActive` migration SQL but the
+  generated client wasn't actually carrying the new field until a manual `npx prisma generate`
+  (the running dev server's stale client threw `Unknown argument isActive` on the first live
+  `PATCH` attempt) — worth checking first if a freshly-migrated field ever 500s as "unknown
+  argument" again.
+
+# User deletion: the same RESTRICT-FK bug, a third time (2026-08-06)
+
+Found the same way as the §4.20/§4.21-class findings above — a deliberate "what's still missing"
+pass, not a repeat of an earlier answer. `UsersService.removeUserForTenant` (`DELETE
+/users/:id`) did a bare `prisma.user.delete()`, with no handling of the exact same class of
+`RESTRICT` foreign keys that had just been fixed twice for tenant deletion. Unlike the tenant
+case, this one is **not a corner case** — reproduced live on the very first real attempt: created
+a tenant, had its Admin create an Analyst, had the Analyst log in and complete the mandatory
+first-login password change (unconditional for every new account, per the hard provisioning
+rule), then had the Admin delete that Analyst — immediate `500`,
+`RefreshToken_userId_fkey`. Since every user must log in and change their password before doing
+anything else, this meant **deleting essentially any real user was broken**, not just users
+with unusual activity.
+
+- Fixed with the same shape as the tenant-deletion fixes: `removeUserForTenant` now runs a
+  `$transaction` array that clears `RefreshToken`/`PasswordHistory` (`where: { userId: id }`,
+  same relation-scoping reasoning as §4.21 — neither table has a `tenantId` column) and nulls out
+  `assignedToUserId` on all four assign-workflow tables (`SiemAlert`, `EdrDetection`,
+  `DfirIncident`, `VmVulnerability` — each also `RESTRICT`s on `assignedToUserId`) before the
+  `user.delete()` itself. Unassigning clears the FK, not the record — the alert/detection/
+  incident/vulnerability itself is untouched, it just becomes unassigned.
+- Verified live two ways: the exact failing scenario above (now succeeds), and a second case
+  specifically exercising the `assignedToUserId` dimension — created another Analyst, walked a
+  real EDR→SIEM chain to get a live alert, assigned it to that Analyst, then deleted the Analyst
+  while the assignment was still active. Deletion succeeded; the alert survived with
+  `assignedToUserId: null`.
+- **One honest, minor finding, not fixed here**: that surviving alert kept `status: "ASSIGNED"`
+  with a now-null assignee — an inconsistent combination the explicit `DELETE .../:id/assign`
+  unassign endpoint (§4.19) always prevents by reverting status to `OPEN` in the same write. Bulk
+  user-deletion cleanup only clears the assignee, not the status, for two reasons: (1) blindly
+  reverting status to `OPEN` for *every* record assigned to the deleted user would be wrong for
+  already-`RESOLVED`/`CONTAINED` ones — resolving deliberately does not clear `assignedToUserId`
+  (§4.18, "resolving doesn't clobber the assignedToUserId set by the earlier assign", since it's
+  kept as a "who resolved this" record), so a blanket revert would incorrectly reopen closed
+  incidents; correctly scoping the revert to only `TRANSITIONABLE_STATUSES` rows adds meaningful
+  complexity (a second conditional `updateMany` per table) for what's a rare
+  administrative operation, not a user-facing action. (2) `AssetFeedEntry` also isn't synced for
+  this path (no event emitted) — same "eventually consistent, dashboard feed, not source of
+  truth" trade-off already accepted by the Phase 7 decision. Left as-is; revisit only if a real
+  workflow depends on an ASSIGNED-with-no-assignee record never appearing.
+- `users.service.spec.ts`'s `removeUserForTenant` tests rewritten for the `$transaction` shape
+  (all six deletion/unassignment calls plus the final `user.delete()` asserted); no e2e changes
+  needed (`test/users.e2e-spec.ts` mocks `UsersService` directly, not `PrismaService`, for this
+  route). 447 unit / 168 e2e passing — unchanged, since this extended existing test cases rather
+  than adding new ones.
+
+# VmAsset/EdrEndpoint mutability gap closed (2026-08-06)
+
+Found the same deliberate-completeness way as every finding above it, not a repeat of an earlier
+answer. `VmAsset` had `POST`/`GET /vm/assets` only; `EdrEndpoint` didn't even have a manual
+create route (only auto-upserted via `ingest()`) and had `GET /edr/endpoints` only — neither had
+any `PATCH`/`DELETE`. Same category of gap as the CTI IOC/SOAR playbook one closed earlier: both
+are pure inventory/reference data (a wrong hostname/IP, a decommissioned host, duplicate/test
+data), not the deliberately-immutable event records (`SiemAlert`/`EdrDetection`/`DfirIncident`/
+`VmVulnerability`) that only ever evolve through status/assignee by design.
+
+- `PATCH /vm/assets/:id` and `PATCH /edr/endpoints/:id` (Analyst/Admin, matching each module's
+  existing create-route RBAC) — editable fields only (`name`/`ip`/`type` for VM,
+  `hostname`/`ip`/`os`/`status` for EDR).
+- `DELETE /vm/assets/:id` and `DELETE /edr/endpoints/:id` (Analyst/Admin) — both guarded the same
+  way `SoarService.deletePlaybook` already was: `VmVulnerability.assetId` and
+  `EdrDetection.endpointId` both `RESTRICT` on their parent, so a naive hard delete would just be
+  a fourth instance of the RESTRICT-FK bug class fixed three times above. Checked explicitly via
+  `count()` before deleting; `409 Conflict` otherwise.
+- `EdrEndpointStatus` gained a fourth value, `DECOMMISSIONED`, alongside the delete guard — the
+  intended path for retiring a host that still has detection history, mirroring the `isActive`
+  toggle `SoarPlaybook` got for the same reason. `VmAsset` has no equivalent lifecycle field;
+  freeing one up for deletion means remediating or accepting-risk its vulnerabilities first,
+  same as `SoarPlaybook`'s "no executions" requirement — no toggle invented for it, since nothing
+  in the existing design suggested one was needed.
+- Verified live: `PATCH`/`DELETE` on a fresh asset/endpoint with no children (both succeed);
+  `DELETE` on one with a real child record (both correctly `409`, EDR's message pointing at the
+  new `DECOMMISSIONED` status); `PATCH` to `DECOMMISSIONED` on the blocked endpoint (succeeds);
+  tenant deletion afterward still cleanly tears down the new data (already covered by the
+  existing `VmAsset`/`EdrEndpoint` entries in `deleteTenantWithUsers`'s dependency list, no
+  changes needed there).
+- Verified three ways: full unit + e2e suites (465 unit / 176 e2e, up from 447 + 168 — new
+  `updateEndpoint`/`deleteEndpoint`/`updateAsset`/`deleteAsset` describe blocks across all four
+  service/controller specs, plus `PATCH`/`DELETE` e2e route tests on both modules), typecheck and
+  lint clean, and live against the real dev server + Postgres as described above. Regenerated the
+  Prisma client explicitly after migrating (`npx prisma generate`, not just `migrate dev`) before
+  starting the dev server this time, avoiding the stale-client gotcha hit in the CTI/SOAR pass.
+
+# Full completeness scan (2026-08-06)
+
+Requested explicitly as a single consolidated pass, rather than another one-gap-at-a-time round
+— audited RBAC (every mutating route's `@Roles` guard, including class-level ones), DTO
+validation (any remaining `@IsObject()`-style unvalidated fields), and every `.delete()`/
+`.deleteMany()` call site against the full FK graph, in addition to the usual "what's still
+create-only" sweep. RBAC and DTO validation both came back clean — every mutating route is
+guarded (individually or via a controller-level `@Roles`), and the only remaining unvalidated
+object field is `SoarPlaybook.actions`, already a deliberate, documented decision (§4.20 — no
+real schema exists to validate against while SOAR execution is simulated). Four concrete findings
+came out of the FK/CRUD sweep; three were fixed, one was found, attempted, and deliberately
+reverted:
+
+**1. `TenantModule` had zero API surface — the actual major finding.** Every reference to it
+traced back to only two places: `PollingService` (reads/updates `isActive`), and the demo seed
+script (the only writer). `TenantsService.createTenantWithAdmin` — the real provisioning path —
+never touched it. Concretely: **every tenant created through the real API had zero
+`TenantModule` rows, forever**, since nothing in the app ever wrote one outside the seed script.
+Phase 9's scheduled polling skeleton had only ever been exercised against seed data — for a real
+tenant, `where: { isActive: true }` silently matched nothing.
+   - Fixed with a full CRUD surface under the existing `TenantsController` (already
+     `@Roles(SUPER_ADMIN)`-gated at the class level, so no new RBAC boundary needed): `GET
+     /tenants/:id/modules`, `POST` (activate — `{ moduleName, config? }`, `409` on duplicate via
+     the same P2002-catch pattern used elsewhere), `PATCH /tenants/:id/modules/:moduleName`
+     (`{ isActive?, config? }`), `DELETE` (remove entirely). `:moduleName` validated with Nest's
+     built-in `ParseEnumPipe(ModuleName)` — a malformed value 400s before ever reaching the
+     service.
+   - Deliberately **not** auto-provisioned at tenant creation — root `CLAUDE.md` describes
+     tenants as able to "activate the modules relevant to them," meaning which modules apply is
+     a per-tenant decision, not a default every tenant gets. The new CRUD *is* that activation
+     path; nothing about `createTenantWithAdmin` itself changed.
+   - Verified live: a freshly created tenant's `GET .../modules` genuinely returns `[]` (the bug,
+     confirmed first), then activate → `409` on a duplicate activate → `PATCH` deactivate →
+     `DELETE` → `404` on a second delete → back to `[]`. Also confirmed the invalid-moduleName
+     400 fires before the service is ever called.
+- **2. `PATCH /tenants/:id`** — a tenant's name could never be corrected after creation. Added,
+  `SUPER_ADMIN`-gated same as every other tenant route. Live-verified rename + 404 on a missing
+  tenant + 403 for a non-Super-Admin.
+- **3. `DELETE /dfir/incidents/:id/links/:linkId`** — `POST .../links` existed, nothing could
+  ever remove a mistakenly-added link. Nothing references `DfirLink` (it's the leaf of the
+  polymorphic link relationship), so — unlike the `SoarPlaybook`/`EdrEndpoint`/`VmAsset` deletes
+  before it — this one needed no RESTRICT-FK guard, just tenant/incident/link ownership checks.
+  Live-verified against a real orchestration-chain incident with two real auto-created links:
+  deleted one, confirmed the other survived untouched, confirmed a second delete of the same
+  link correctly 404s.
+- **4. Attempted and reverted: `ParseUUIDPipe` on every `:id`/`:linkId` route param (29 call
+  sites).** A malformed ID currently reaches Prisma unvalidated and surfaces as an uncaught `500`
+  (via `AllExceptionsFilter`) instead of a clean `400` — a real but minor HTTP-semantics gap, not
+  a functional defect (nothing crashes, no data corruption, the response body is still a clean
+  JSON error). Applied the pipe everywhere, then ran the full e2e suite: **42 of 176 tests broke**
+  — the entire existing e2e suite is built on human-readable pseudo-IDs (`'tenant-1'`,
+  `'endpoint-1'`, `'ioc-1'`, ...) as its established fixture convention, not real UUID strings,
+  across essentially every spec file. Fixing this properly would mean rewriting ID fixtures
+  throughout the whole e2e suite — a large, mechanical, disruptive change for what's a
+  status-code nicety. Reverted in full; not pursued further. If ever revisited, it should be a
+  dedicated pass that rewrites e2e fixtures to real UUIDs first, not bundled into an unrelated
+  change.
+- Verified three ways for the three items that shipped: full unit + e2e suites (491 unit / 187
+  e2e, up from 465 + 176 — new `renameTenant`/`listModules`/`activateModule`/`updateModule`/
+  `deactivateModule` describe blocks in both `tenants.service.spec.ts` and
+  `tenants.controller.spec.ts`, `unlinkRecord`/`deleteLink` blocks in the DFIR specs, plus e2e
+  route tests for all of it), typecheck and lint clean, and live against the real dev server +
+  Postgres as described per-item above. No schema migration was needed this round —
+  `TenantModule` already existed, so the earlier Prisma-client-regeneration gotcha didn't recur,
+  though `npx prisma generate` was still run proactively before starting the dev server.
+
 # API surface & operational hardening
 
 - All routes are served under a global `/api` prefix (`app.setGlobalPrefix('api')` in
@@ -664,7 +929,7 @@ polling-ingestion skeleton come after all six modules exist, since they all read
 - [x] Prisma: `SoarPlaybook { id, tenantId, name, triggerCondition Json, actions Json,
       createdAt }`, `SoarExecution { id, tenantId, playbookId, alertId, status enum (PENDING |
       RUNNING | SUCCESS | FAILED), logs String?, createdAt }`.
-- [ ] `SoarService implements SecurityModule<SoarExecution, SoarQueryFilters>`: `ingest()`,
+- [x] `SoarService implements SecurityModule<SoarExecution, SoarQueryFilters>`: `ingest()`,
       `query()`, `healthCheck()`, `evaluateTriggers(tenantId, event: UnifiedEvent)` (loads active
       playbooks, does a simple exact-match check of `triggerCondition` against the event —
       e.g. `{ severity: 'CRITICAL' }` — creates a `SoarExecution` row, simulated per decision 8,
@@ -861,6 +1126,28 @@ polling-ingestion skeleton come after all six modules exist, since they all read
       shared array, asserts each dependency constraint); `test/tenants.e2e-spec.ts`'s mocked
       `PrismaService` and fixed `$transaction` resolved array both updated to match. 296 unit /
       128 e2e passing.
+      **Found 2026-08-06, fixed the same day.** `RefreshToken` and `PasswordHistory` (both added
+      the same day as the fix above, in the auth-hardening work) were never retrofitted into
+      `deleteTenantWithUsers`'s dependency list either, and both also have a `RESTRICT` FK on
+      `userId`. `DELETE /api/tenants/:id` threw the identical 500 for any tenant whose users had
+      ever logged in with a refresh-token session (`RefreshToken_userId_fkey`) or gone through a
+      forced/self password change or an Admin-initiated reset
+      (`PasswordHistory_userId_fkey`) — which in practice is every real tenant, since every new
+      user is created with `mustChangePassword: true` and must change it before doing anything
+      else. First found incidentally while cleaning up an unrelated live-verification tenant
+      (a freshly-created tenant whose Admin had only logged in and completed the mandatory
+      password change, no module data at all, still failed twice in a row, once per table).
+      Fixed by extending the same `$transaction` array with both tables — `refreshToken.
+      deleteMany`/`passwordHistory.deleteMany` filtered via the `user: { tenantId }` relation
+      field rather than a direct `tenantId` column (neither table has one; both are scoped by
+      `userId`), placed right before `user.deleteMany` since that's the row they both reference.
+      Verified live: recreated the exact failing scenario (fresh tenant → Admin login → mandatory
+      password change) and confirmed `DELETE /api/tenants/:id` now succeeds in one call, then
+      confirmed via `GET /api/tenants` that the tenant is genuinely gone.
+      `tenants.service.spec.ts`'s full-coverage and ordering tests extended to cover both new
+      tables; `test/tenants.e2e-spec.ts`'s mocked `$transaction` resolved array updated to match
+      the new array length/order. 447 unit / 168 e2e passing (unchanged from §4.20 — this fix
+      added tests to existing suites, no new ones).
 - [ ] **Not in this phase:** proxying this through the Next.js BFF layer — that's frontend work,
       and per the earlier design discussion, streaming through a Next.js Route Handler needs its
       own doc-check (`node_modules/next/dist/docs/`) before assuming it behaves like a normal

@@ -121,9 +121,39 @@ export class UsersService {
   async removeUserForTenant(id: string, tenantId: string) {
     await this.findByIdForTenant(id, tenantId);
 
-    return this.prisma.user.delete({
-      where: { id },
-    });
+    // RefreshToken and PasswordHistory RESTRICT on userId (same class of bug
+    // already hit and fixed for tenant deletion — see TenantsService), and
+    // every one of the four assign-workflow tables RESTRICTs assignedToUserId
+    // the same way. A user who's ever logged in (RefreshToken), changed a
+    // password (PasswordHistory — unconditional on first login), or is
+    // currently assigned an open record would otherwise 500 a plain
+    // user.delete(). Assignments are cleared (assignedToUserId -> null), not
+    // deleted — the underlying alert/detection/incident/vulnerability stays,
+    // it just becomes unassigned.
+    const results = await this.prisma.$transaction([
+      this.prisma.refreshToken.deleteMany({ where: { userId: id } }),
+      this.prisma.passwordHistory.deleteMany({ where: { userId: id } }),
+      this.prisma.siemAlert.updateMany({
+        where: { assignedToUserId: id },
+        data: { assignedToUserId: null },
+      }),
+      this.prisma.edrDetection.updateMany({
+        where: { assignedToUserId: id },
+        data: { assignedToUserId: null },
+      }),
+      this.prisma.dfirIncident.updateMany({
+        where: { assignedToUserId: id },
+        data: { assignedToUserId: null },
+      }),
+      this.prisma.vmVulnerability.updateMany({
+        where: { assignedToUserId: id },
+        data: { assignedToUserId: null },
+      }),
+      this.prisma.user.delete({ where: { id } }),
+    ]);
+
+    // Last element is the user.delete() result, per the array above.
+    return results[6];
   }
 
   async changeRoleForTenant(id: string, tenantId: string, role: UserRole) {

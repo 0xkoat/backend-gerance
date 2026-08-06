@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { Logger } from '@nestjs/common';
+import { Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { CtiService, CtiQueryFilters } from './cti.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -12,6 +12,8 @@ const mockPrismaService = {
     findUnique: jest.fn(),
     findFirst: jest.fn(),
     findMany: jest.fn(),
+    update: jest.fn(),
+    delete: jest.fn(),
   },
 };
 
@@ -169,6 +171,81 @@ describe('CtiService', () => {
       });
 
       expect(mockPrismaService.ctiIoc.findFirst).not.toHaveBeenCalled();
+      expect(mockEventEmitter.emit).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateIoc', () => {
+    it('updates confidence/source scoped to the tenant', async () => {
+      const existing = { id: 'ioc-1', tenantId: 'tenant-1' };
+      const updated = { ...existing, confidence: 40, source: 'corrected' };
+      mockPrismaService.ctiIoc.findUnique.mockResolvedValue(existing);
+      mockPrismaService.ctiIoc.update.mockResolvedValue(updated);
+
+      const result = await service.updateIoc('tenant-1', 'ioc-1', {
+        confidence: 40,
+        source: 'corrected',
+      });
+
+      expect(result).toEqual(updated);
+      expect(mockPrismaService.ctiIoc.update).toHaveBeenCalledWith({
+        where: { id: 'ioc-1' },
+        data: { confidence: 40, source: 'corrected' },
+      });
+    });
+
+    it('throws NotFoundException when the IOC belongs to another tenant', async () => {
+      mockPrismaService.ctiIoc.findUnique.mockResolvedValue({
+        id: 'ioc-1',
+        tenantId: 'tenant-2',
+      });
+
+      await expect(
+        service.updateIoc('tenant-1', 'ioc-1', { confidence: 10 }),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.ctiIoc.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the IOC does not exist', async () => {
+      mockPrismaService.ctiIoc.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.updateIoc('tenant-1', 'missing', { confidence: 10 }),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('deleteIoc', () => {
+    it('deletes the IOC and emits cti.ioc.deleted', async () => {
+      mockPrismaService.ctiIoc.findUnique.mockResolvedValue({
+        id: 'ioc-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.ctiIoc.delete.mockResolvedValue({ id: 'ioc-1' });
+
+      await service.deleteIoc('tenant-1', 'ioc-1');
+
+      expect(mockPrismaService.ctiIoc.delete).toHaveBeenCalledWith({
+        where: { id: 'ioc-1' },
+      });
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith('cti.ioc.deleted', {
+        tenantId: 'tenant-1',
+        source: ModuleName.CTI,
+        recordId: 'ioc-1',
+        timestamp: expect.any(Date),
+      });
+    });
+
+    it('throws NotFoundException when the IOC belongs to another tenant', async () => {
+      mockPrismaService.ctiIoc.findUnique.mockResolvedValue({
+        id: 'ioc-1',
+        tenantId: 'tenant-2',
+      });
+
+      await expect(service.deleteIoc('tenant-1', 'ioc-1')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(mockPrismaService.ctiIoc.delete).not.toHaveBeenCalled();
       expect(mockEventEmitter.emit).not.toHaveBeenCalled();
     });
   });

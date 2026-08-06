@@ -28,7 +28,15 @@ const mockPrismaService = {
   passwordHistory: {
     findMany: jest.fn(),
     create: jest.fn(),
+    deleteMany: jest.fn(),
   },
+  refreshToken: {
+    deleteMany: jest.fn(),
+  },
+  siemAlert: { updateMany: jest.fn() },
+  edrDetection: { updateMany: jest.fn() },
+  dfirIncident: { updateMany: jest.fn() },
+  vmVulnerability: { updateMany: jest.fn() },
   $transaction: jest.fn(),
 };
 
@@ -304,13 +312,38 @@ describe('UsersService', () => {
   describe('removeUserForTenant', () => {
     const existingUser = { id: '1', tenantId: 'tenant-1' };
 
-    it('deletes and returns the user on success', async () => {
+    it('clears RefreshToken/PasswordHistory and unassigns the four module tables before deleting the user', async () => {
       mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
-      mockPrismaService.user.delete.mockResolvedValue(existingUser);
+      mockPrismaService.$transaction.mockResolvedValue([
+        { count: 2 }, // refreshToken
+        { count: 1 }, // passwordHistory
+        { count: 0 }, // siemAlert
+        { count: 0 }, // edrDetection
+        { count: 0 }, // dfirIncident
+        { count: 0 }, // vmVulnerability
+        existingUser, // user.delete()
+      ]);
 
       const result = await service.removeUserForTenant('1', 'tenant-1');
 
       expect(result).toEqual(existingUser);
+      expect(mockPrismaService.refreshToken.deleteMany).toHaveBeenCalledWith({
+        where: { userId: '1' },
+      });
+      expect(mockPrismaService.passwordHistory.deleteMany).toHaveBeenCalledWith(
+        { where: { userId: '1' } },
+      );
+      for (const table of [
+        mockPrismaService.siemAlert,
+        mockPrismaService.edrDetection,
+        mockPrismaService.dfirIncident,
+        mockPrismaService.vmVulnerability,
+      ]) {
+        expect(table.updateMany).toHaveBeenCalledWith({
+          where: { assignedToUserId: '1' },
+          data: { assignedToUserId: null },
+        });
+      }
       expect(mockPrismaService.user.delete).toHaveBeenCalledWith({
         where: { id: '1' },
       });
@@ -322,7 +355,7 @@ describe('UsersService', () => {
       await expect(
         service.removeUserForTenant('missing-id', 'tenant-1'),
       ).rejects.toThrow(NotFoundException);
-      expect(mockPrismaService.user.delete).not.toHaveBeenCalled();
+      expect(mockPrismaService.$transaction).not.toHaveBeenCalled();
     });
 
     it('throws NotFoundException when the user belongs to a different tenant', async () => {
@@ -334,7 +367,7 @@ describe('UsersService', () => {
       await expect(
         service.removeUserForTenant('1', 'tenant-1'),
       ).rejects.toThrow(NotFoundException);
-      expect(mockPrismaService.user.delete).not.toHaveBeenCalled();
+      expect(mockPrismaService.$transaction).not.toHaveBeenCalled();
     });
   });
 

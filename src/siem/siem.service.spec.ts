@@ -263,6 +263,21 @@ describe('SiemService', () => {
         }),
       );
     });
+
+    it('filters by assignedToUserId when provided', async () => {
+      mockPrismaService.siemAlert.findMany.mockResolvedValue([]);
+
+      await service.query({
+        tenantId: 'tenant-1',
+        assignedToUserId: 'analyst-1',
+      });
+
+      expect(mockPrismaService.siemAlert.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { tenantId: 'tenant-1', assignedToUserId: 'analyst-1' },
+        }),
+      );
+    });
   });
 
   describe('healthCheck', () => {
@@ -407,6 +422,105 @@ describe('SiemService', () => {
 
       await expect(
         service.assignAlert('tenant-1', 'alert-1', caller, 'analyst-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('unassignAlert', () => {
+    const assigned = {
+      id: 'alert-1',
+      tenantId: 'tenant-1',
+      status: SiemAlertStatus.ASSIGNED,
+      assignedToUserId: 'analyst-1',
+    };
+
+    it('lets the assignee unassign, reverting status to OPEN', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-1' });
+      mockPrismaService.siemAlert.findUnique.mockResolvedValue(assigned);
+      mockPrismaService.siemAlert.update.mockResolvedValue({
+        ...assigned,
+        assignedToUserId: null,
+        status: SiemAlertStatus.OPEN,
+      });
+
+      const result = await service.unassignAlert('tenant-1', 'alert-1', caller);
+
+      expect(result.status).toBe(SiemAlertStatus.OPEN);
+      expect(mockPrismaService.siemAlert.update).toHaveBeenCalledWith({
+        where: { id: 'alert-1' },
+        data: { assignedToUserId: null, status: SiemAlertStatus.OPEN },
+      });
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+        'siem.alert.unassigned',
+        expect.objectContaining({
+          tenantId: 'tenant-1',
+          source: ModuleName.SIEM,
+          recordId: 'alert-1',
+          status: SiemAlertStatus.OPEN,
+        }),
+      );
+    });
+
+    it('lets an Admin unassign an alert assigned to someone else', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.siemAlert.findUnique.mockResolvedValue(assigned);
+      mockPrismaService.siemAlert.update.mockResolvedValue({
+        ...assigned,
+        assignedToUserId: null,
+        status: SiemAlertStatus.OPEN,
+      });
+
+      await service.unassignAlert('tenant-1', 'alert-1', caller);
+
+      expect(mockPrismaService.siemAlert.update).toHaveBeenCalledWith({
+        where: { id: 'alert-1' },
+        data: { assignedToUserId: null, status: SiemAlertStatus.OPEN },
+      });
+    });
+
+    it('rejects an Analyst who is not the assignee', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-2' });
+      mockPrismaService.siemAlert.findUnique.mockResolvedValue(assigned);
+
+      await expect(
+        service.unassignAlert('tenant-1', 'alert-1', caller),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrismaService.siemAlert.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects unassigning an alert that was never assigned', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.siemAlert.findUnique.mockResolvedValue({
+        ...assigned,
+        status: SiemAlertStatus.OPEN,
+        assignedToUserId: null,
+      });
+
+      await expect(
+        service.unassignAlert('tenant-1', 'alert-1', caller),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.siemAlert.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects unassigning an alert that has already been resolved', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.siemAlert.findUnique.mockResolvedValue({
+        ...assigned,
+        status: SiemAlertStatus.RESOLVED,
+      });
+
+      await expect(
+        service.unassignAlert('tenant-1', 'alert-1', caller),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.siemAlert.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the alert does not exist', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.siemAlert.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.unassignAlert('tenant-1', 'missing-id', caller),
       ).rejects.toThrow(NotFoundException);
     });
   });

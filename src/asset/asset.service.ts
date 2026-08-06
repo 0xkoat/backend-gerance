@@ -8,6 +8,7 @@ import type {
   DfirIncidentPayload,
   RecordAssignedPayload,
   RecordStatusChangedPayload,
+  RecordDeletedPayload,
   BaseQueryFilters,
 } from '../common/security-module/types';
 import type { AssetFeedEntry } from '../generated/prisma/client';
@@ -177,6 +178,45 @@ export class AssetService {
     await this.applyAssignment(payload);
   }
 
+  @OnEvent('siem.alert.unassigned')
+  async handleSiemAlertUnassigned(
+    payload: RecordStatusChangedPayload,
+  ): Promise<void> {
+    await this.applyUnassignment(payload);
+  }
+
+  @OnEvent('edr.detection.unassigned')
+  async handleEdrDetectionUnassigned(
+    payload: RecordStatusChangedPayload,
+  ): Promise<void> {
+    await this.applyUnassignment(payload);
+  }
+
+  @OnEvent('dfir.incident.unassigned')
+  async handleDfirIncidentUnassigned(
+    payload: RecordStatusChangedPayload,
+  ): Promise<void> {
+    await this.applyUnassignment(payload);
+  }
+
+  @OnEvent('vm.vulnerability.unassigned')
+  async handleVmVulnerabilityUnassigned(
+    payload: RecordStatusChangedPayload,
+  ): Promise<void> {
+    await this.applyUnassignment(payload);
+  }
+
+  @OnEvent('cti.ioc.deleted')
+  async handleCtiIocDeleted(payload: RecordDeletedPayload): Promise<void> {
+    await this.prisma.assetFeedEntry.deleteMany({
+      where: {
+        tenantId: payload.tenantId,
+        source: payload.source,
+        sourceId: payload.recordId,
+      },
+    });
+  }
+
   private async applyAssignment(payload: RecordAssignedPayload): Promise<void> {
     await this.prisma.assetFeedEntry.updateMany({
       where: {
@@ -204,6 +244,19 @@ export class AssetService {
     });
   }
 
+  private async applyUnassignment(
+    payload: RecordStatusChangedPayload,
+  ): Promise<void> {
+    await this.prisma.assetFeedEntry.updateMany({
+      where: {
+        tenantId: payload.tenantId,
+        source: payload.source,
+        sourceId: payload.recordId,
+      },
+      data: { status: payload.status, assignedToUserId: null },
+    });
+  }
+
   async getUnifiedFeed(
     tenantId: string,
     filters: BaseQueryFilters,
@@ -213,6 +266,9 @@ export class AssetService {
       where: {
         tenantId,
         ...(filters.severity && { severity: filters.severity }),
+        ...(filters.assignedToUserId && {
+          assignedToUserId: filters.assignedToUserId,
+        }),
         ...((filters.dateFrom || filters.dateTo) && {
           timestamp: {
             ...(filters.dateFrom && { gte: filters.dateFrom }),

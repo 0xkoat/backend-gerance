@@ -7,6 +7,7 @@ import type {
   DfirIncidentPayload,
   RecordAssignedPayload,
   RecordStatusChangedPayload,
+  RecordDeletedPayload,
 } from '../common/security-module/types';
 
 type StreamableEvent =
@@ -14,7 +15,8 @@ type StreamableEvent =
   | SoarExecutionPayload
   | DfirIncidentPayload
   | RecordAssignedPayload
-  | RecordStatusChangedPayload;
+  | RecordStatusChangedPayload
+  | RecordDeletedPayload;
 
 @Injectable()
 export class EventsService {
@@ -35,6 +37,11 @@ export class EventsService {
       fromEvent(this.eventEmitter, 'dfir.incident.assigned'),
       fromEvent(this.eventEmitter, 'dfir.incident.status_changed'),
       fromEvent(this.eventEmitter, 'vm.vulnerability.assigned'),
+      fromEvent(this.eventEmitter, 'siem.alert.unassigned'),
+      fromEvent(this.eventEmitter, 'edr.detection.unassigned'),
+      fromEvent(this.eventEmitter, 'dfir.incident.unassigned'),
+      fromEvent(this.eventEmitter, 'vm.vulnerability.unassigned'),
+      fromEvent(this.eventEmitter, 'cti.ioc.deleted'),
     ).pipe(
       map((event) => event as StreamableEvent),
       filter((event) => event.tenantId === tenantId),

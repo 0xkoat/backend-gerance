@@ -4,7 +4,8 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Prisma, UserRole } from '../generated/prisma/client';
+import { ModuleName, Prisma, UserRole } from '../generated/prisma/client';
+import type { TenantModule } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTenantDto } from './dto/createTenant.dto';
 import * as argon2 from 'argon2';
@@ -80,6 +81,106 @@ export class TenantsService {
     };
   }
 
+  async renameTenant(id: string, name: string) {
+    await this.ensureTenantExists(id);
+
+    return this.prisma.tenant.update({ where: { id }, data: { name } });
+  }
+
+  // No CRUD for TenantModule existed anywhere before this — the only writer
+  // was the demo seed script, so a tenant created through the real
+  // provisioning path (createTenantWithAdmin, above) never got any rows,
+  // meaning PollingService's `where: { isActive: true }` query silently
+  // matched nothing for every real tenant. This is the actual activation
+  // path the architecture doc's "activate the modules relevant to them"
+  // language describes — deliberately not auto-provisioned at tenant
+  // creation, since which modules apply is a per-tenant decision, not a
+  // default every tenant gets.
+  async listModules(tenantId: string): Promise<TenantModule[]> {
+    await this.ensureTenantExists(tenantId);
+
+    return this.prisma.tenantModule.findMany({ where: { tenantId } });
+  }
+
+  async activateModule(
+    tenantId: string,
+    moduleName: ModuleName,
+    config?: object,
+  ): Promise<TenantModule> {
+    await this.ensureTenantExists(tenantId);
+
+    try {
+      return await this.prisma.tenantModule.create({
+        data: { tenantId, moduleName, config },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException(
+          `${moduleName} is already configured for this tenant — use PATCH to update it`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async updateModule(
+    tenantId: string,
+    moduleName: ModuleName,
+    dto: { isActive?: boolean; config?: object },
+  ): Promise<TenantModule> {
+    await this.ensureTenantExists(tenantId);
+
+    try {
+      return await this.prisma.tenantModule.update({
+        where: { tenantId_moduleName: { tenantId, moduleName } },
+        data: dto,
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2025'
+      ) {
+        throw new NotFoundException(
+          `${moduleName} is not configured for this tenant`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async deactivateModule(
+    tenantId: string,
+    moduleName: ModuleName,
+  ): Promise<void> {
+    await this.ensureTenantExists(tenantId);
+
+    try {
+      await this.prisma.tenantModule.delete({
+        where: { tenantId_moduleName: { tenantId, moduleName } },
+      });
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2025'
+      ) {
+        throw new NotFoundException(
+          `${moduleName} is not configured for this tenant`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  private async ensureTenantExists(id: string): Promise<void> {
+    const tenant = await this.prisma.tenant.findUnique({ where: { id } });
+    if (!tenant) {
+      throw new NotFoundException('Tenant not found');
+    }
+  }
+
   async deleteTenantWithUsers(id: string) {
     await this.findById(id);
 
@@ -88,7 +189,11 @@ export class TenantsService {
     // can go — order matters here: children before the parents they
     // reference (e.g. DfirLink before DfirIncident, SoarExecution before
     // both SoarPlaybook and SiemAlert), and SiemAlert before User since an
-    // alert can optionally reference its assignedToUser.
+    // alert can optionally reference its assignedToUser. RefreshToken and
+    // PasswordHistory are scoped by userId, not tenantId, but also RESTRICT
+    // on User — filtered via the `user` relation so they can stay in this
+    // same array-based transaction instead of needing a separate
+    // fetch-user-ids-first step.
     const results = await this.prisma.$transaction([
       this.prisma.assetFeedEntry.deleteMany({ where: { tenantId: id } }),
       this.prisma.dfirLink.deleteMany({ where: { tenantId: id } }),
@@ -103,12 +208,18 @@ export class TenantsService {
       this.prisma.vmVulnerability.deleteMany({ where: { tenantId: id } }),
       this.prisma.vmAsset.deleteMany({ where: { tenantId: id } }),
       this.prisma.tenantModule.deleteMany({ where: { tenantId: id } }),
+      this.prisma.refreshToken.deleteMany({
+        where: { user: { tenantId: id } },
+      }),
+      this.prisma.passwordHistory.deleteMany({
+        where: { user: { tenantId: id } },
+      }),
       this.prisma.user.deleteMany({ where: { tenantId: id } }),
       this.prisma.tenant.delete({ where: { id } }),
     ]);
 
     // Last element is the tenant.delete() result, per the array above.
-    const deletedTenant = results[14];
+    const deletedTenant = results[16];
     return deletedTenant;
   }
 }

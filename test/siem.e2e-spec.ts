@@ -85,6 +85,7 @@ describe('SiemController (e2e)', () => {
     listLogs: jest.fn(),
     query: jest.fn(),
     assignAlert: jest.fn(),
+    unassignAlert: jest.fn(),
     updateAlertStatus: jest.fn(),
     ingest: jest.fn(),
   };
@@ -213,6 +214,37 @@ describe('SiemController (e2e)', () => {
         .send({})
         .expect(403);
       expect(mockSiemService.assignAlert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DELETE /siem/alerts/:id/assign', () => {
+    it('allows an Analyst to unassign', async () => {
+      const token = await loginAs(analystUser.email);
+      mockSiemService.unassignAlert.mockResolvedValue({
+        id: 'alert-1',
+        status: SiemAlertStatus.OPEN,
+      });
+
+      await request(app.getHttpServer())
+        .delete('/api/siem/alerts/alert-1/assign')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(mockSiemService.unassignAlert).toHaveBeenCalledWith(
+        'tenant-1',
+        'alert-1',
+        expect.objectContaining({ role: UserRole.ANALYST }),
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .delete('/api/siem/alerts/alert-1/assign')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      expect(mockSiemService.unassignAlert).not.toHaveBeenCalled();
     });
   });
 

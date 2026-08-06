@@ -5,6 +5,7 @@ import {
   Body,
   Param,
   Patch,
+  Delete,
   Query,
 } from '@nestjs/common';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -15,6 +16,7 @@ import { EdrService } from './edr.service';
 import { IngestEdrEventDto } from './dto/ingestEdrEvent.dto';
 import { EdrQueryDto } from './dto/edrQuery.dto';
 import { UpdateEdrDetectionStatusDto } from './dto/updateEdrDetectionStatus.dto';
+import { UpdateEdrEndpointDto } from './dto/updateEdrEndpoint.dto';
 import { UnifiedEvent } from '../common/security-module/types';
 import { requireTenantId } from '../common/require-tenant-id';
 import { AssignDto } from '../common/dto/assign.dto';
@@ -27,6 +29,27 @@ export class EdrController {
   async listEndpoints(@CurrentUser() user: AuthenticatedUser) {
     const tenantId = requireTenantId(user);
     return this.edrService.listEndpoints(tenantId);
+  }
+
+  @Patch('endpoints/:id')
+  @Roles(UserRole.ADMIN, UserRole.ANALYST)
+  async updateEndpoint(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() updateEdrEndpointDto: UpdateEdrEndpointDto,
+  ) {
+    const tenantId = requireTenantId(user);
+    return this.edrService.updateEndpoint(tenantId, id, updateEdrEndpointDto);
+  }
+
+  @Delete('endpoints/:id')
+  @Roles(UserRole.ADMIN, UserRole.ANALYST)
+  async deleteEndpoint(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    const tenantId = requireTenantId(user);
+    await this.edrService.deleteEndpoint(tenantId, id);
   }
 
   @Get('detections')
@@ -52,6 +75,16 @@ export class EdrController {
       user,
       assignDto.assignedToUserId,
     );
+  }
+
+  @Delete('detections/:id/assign')
+  @Roles(UserRole.ADMIN, UserRole.ANALYST)
+  async unassignDetection(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    const tenantId = requireTenantId(user);
+    return this.edrService.unassignDetection(tenantId, id, user);
   }
 
   @Patch('detections/:id/status')

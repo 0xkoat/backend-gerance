@@ -10,6 +10,8 @@ import { CtiQueryDto } from './dto/ctiQuery.dto';
 const mockCtiService = {
   query: jest.fn(),
   ingest: jest.fn(),
+  updateIoc: jest.fn(),
+  deleteIoc: jest.fn(),
 };
 
 describe('CtiController', () => {
@@ -105,6 +107,51 @@ describe('CtiController', () => {
         ForbiddenException,
       );
       expect(mockCtiService.ingest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateIoc', () => {
+    it('passes the tenant and id to the service', async () => {
+      const updated = { id: 'ioc-1', tenantId: 'tenant-1', confidence: 40 };
+      mockCtiService.updateIoc.mockResolvedValue(updated);
+
+      const result = await controller.updateIoc(analyst, 'ioc-1', {
+        confidence: 40,
+      });
+
+      expect(result).toEqual(updated);
+      expect(mockCtiService.updateIoc).toHaveBeenCalledWith(
+        'tenant-1',
+        'ioc-1',
+        { confidence: 40 },
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      await expect(
+        controller.updateIoc(noTenantAdmin, 'ioc-1', { confidence: 40 }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockCtiService.updateIoc).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteIoc', () => {
+    it('passes the tenant and id to the service', async () => {
+      mockCtiService.deleteIoc.mockResolvedValue(undefined);
+
+      await controller.deleteIoc(analyst, 'ioc-1');
+
+      expect(mockCtiService.deleteIoc).toHaveBeenCalledWith(
+        'tenant-1',
+        'ioc-1',
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      await expect(
+        controller.deleteIoc(noTenantAdmin, 'ioc-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockCtiService.deleteIoc).not.toHaveBeenCalled();
     });
   });
 

@@ -84,6 +84,8 @@ describe('CtiController (e2e)', () => {
   const mockCtiService = {
     query: jest.fn(),
     ingest: jest.fn(),
+    updateIoc: jest.fn(),
+    deleteIoc: jest.fn(),
   };
 
   async function loginAs(email: string): Promise<string> {
@@ -117,7 +119,9 @@ describe('CtiController (e2e)', () => {
       .useValue({
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
-        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
+        refreshToken: {
+          create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+        },
       })
       .compile();
 
@@ -201,6 +205,67 @@ describe('CtiController (e2e)', () => {
         .send({ ...body, confidence: 150 })
         .expect(400);
       expect(mockCtiService.ingest).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('PATCH /cti/iocs/:id', () => {
+    it('allows an Analyst to update confidence/source', async () => {
+      const token = await loginAs(analystUser.email);
+      mockCtiService.updateIoc.mockResolvedValue({
+        id: 'ioc-1',
+        tenantId: 'tenant-1',
+        confidence: 40,
+      });
+
+      await request(app.getHttpServer())
+        .patch('/api/cti/iocs/ioc-1')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ confidence: 40 })
+        .expect(200);
+
+      expect(mockCtiService.updateIoc).toHaveBeenCalledWith(
+        'tenant-1',
+        'ioc-1',
+        { confidence: 40 },
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .patch('/api/cti/iocs/ioc-1')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ confidence: 40 })
+        .expect(403);
+      expect(mockCtiService.updateIoc).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DELETE /cti/iocs/:id', () => {
+    it('allows an Analyst to delete an IOC', async () => {
+      const token = await loginAs(analystUser.email);
+      mockCtiService.deleteIoc.mockResolvedValue(undefined);
+
+      await request(app.getHttpServer())
+        .delete('/api/cti/iocs/ioc-1')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(mockCtiService.deleteIoc).toHaveBeenCalledWith(
+        'tenant-1',
+        'ioc-1',
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .delete('/api/cti/iocs/ioc-1')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      expect(mockCtiService.deleteIoc).not.toHaveBeenCalled();
     });
   });
 
@@ -336,29 +401,27 @@ describe('EDR -> SIEM -> CTI integration (e2e, real event chain)', () => {
               ) ?? null,
             ),
         ),
-      findUnique: jest
-        .fn()
-        .mockImplementation(
-          ({
-            where,
-          }: {
-            where: {
-              tenantId_type_value: {
-                tenantId: string;
-                type: string;
-                value: string;
-              };
+      findUnique: jest.fn().mockImplementation(
+        ({
+          where,
+        }: {
+          where: {
+            tenantId_type_value: {
+              tenantId: string;
+              type: string;
+              value: string;
             };
-          }) =>
-            Promise.resolve(
-              ctiIocs.find(
-                (i) =>
-                  i.tenantId === where.tenantId_type_value.tenantId &&
-                  i.type === where.tenantId_type_value.type &&
-                  i.value === where.tenantId_type_value.value,
-              ) ?? null,
-            ),
-        ),
+          };
+        }) =>
+          Promise.resolve(
+            ctiIocs.find(
+              (i) =>
+                i.tenantId === where.tenantId_type_value.tenantId &&
+                i.type === where.tenantId_type_value.type &&
+                i.value === where.tenantId_type_value.value,
+            ) ?? null,
+          ),
+      ),
     },
     // Stub below exists only so SOAR's real @OnEvent listeners (also wired
     // globally via AppModule) don't throw when this suite's
@@ -407,7 +470,9 @@ describe('EDR -> SIEM -> CTI integration (e2e, real event chain)', () => {
         ...statefulPrisma,
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
-        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
+        refreshToken: {
+          create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+        },
       })
       .compile();
 

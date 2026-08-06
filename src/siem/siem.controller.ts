@@ -5,6 +5,7 @@ import {
   Body,
   Param,
   Patch,
+  Delete,
   Query,
 } from '@nestjs/common';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -52,6 +53,16 @@ export class SiemController {
       user,
       assignDto.assignedToUserId,
     );
+  }
+
+  @Delete('alerts/:id/assign')
+  @Roles(UserRole.ADMIN, UserRole.ANALYST)
+  async unassignAlert(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    const tenantId = requireTenantId(user);
+    return this.siemService.unassignAlert(tenantId, id, user);
   }
 
   @Patch('alerts/:id/status')

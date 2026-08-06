@@ -6,6 +6,7 @@ import {
   UnifiedEvent,
   RecordAssignedPayload,
   RecordStatusChangedPayload,
+  RecordDeletedPayload,
 } from '../common/security-module/types';
 
 const mockPrismaService = {
@@ -13,6 +14,7 @@ const mockPrismaService = {
     create: jest.fn(),
     findMany: jest.fn(),
     updateMany: jest.fn(),
+    deleteMany: jest.fn(),
   },
 };
 
@@ -199,6 +201,27 @@ describe('AssetService', () => {
     });
   });
 
+  describe('handleCtiIocDeleted', () => {
+    it('removes the matching AssetFeedEntry row', async () => {
+      const payload: RecordDeletedPayload = {
+        tenantId: 'tenant-1',
+        source: ModuleName.CTI,
+        recordId: 'ioc-1',
+        timestamp: new Date('2026-08-06T10:00:00Z'),
+      };
+
+      await service.handleCtiIocDeleted(payload);
+
+      expect(mockPrismaService.assetFeedEntry.deleteMany).toHaveBeenCalledWith({
+        where: {
+          tenantId: 'tenant-1',
+          source: ModuleName.CTI,
+          sourceId: 'ioc-1',
+        },
+      });
+    });
+  });
+
   describe('handleDfirIncident', () => {
     it('writes an AssetFeedEntry projecting the DFIR incident into the shared shape', async () => {
       const timestamp = new Date('2026-08-05T10:25:00Z');
@@ -357,6 +380,83 @@ describe('AssetService', () => {
     });
   });
 
+  describe('unassigned listeners', () => {
+    const unassignedPayload: RecordStatusChangedPayload = {
+      tenantId: 'tenant-1',
+      source: ModuleName.SIEM,
+      recordId: 'alert-1',
+      status: 'OPEN',
+      timestamp: new Date('2026-08-06T10:10:00Z'),
+    };
+
+    it('handleSiemAlertUnassigned clears assignedToUserId and reverts status', async () => {
+      await service.handleSiemAlertUnassigned(unassignedPayload);
+
+      expect(mockPrismaService.assetFeedEntry.updateMany).toHaveBeenCalledWith({
+        where: {
+          tenantId: 'tenant-1',
+          source: ModuleName.SIEM,
+          sourceId: 'alert-1',
+        },
+        data: { status: 'OPEN', assignedToUserId: null },
+      });
+    });
+
+    it('handleEdrDetectionUnassigned updates the matching feed row', async () => {
+      await service.handleEdrDetectionUnassigned({
+        ...unassignedPayload,
+        source: ModuleName.EDR,
+        recordId: 'detection-1',
+      });
+
+      expect(mockPrismaService.assetFeedEntry.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            source: ModuleName.EDR,
+            sourceId: 'detection-1',
+          }),
+          data: { status: 'OPEN', assignedToUserId: null },
+        }),
+      );
+    });
+
+    it('handleDfirIncidentUnassigned updates the matching feed row', async () => {
+      await service.handleDfirIncidentUnassigned({
+        ...unassignedPayload,
+        source: ModuleName.DFIR,
+        recordId: 'incident-1',
+      });
+
+      expect(mockPrismaService.assetFeedEntry.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            source: ModuleName.DFIR,
+            sourceId: 'incident-1',
+          }),
+          data: { status: 'OPEN', assignedToUserId: null },
+        }),
+      );
+    });
+
+    it('handleVmVulnerabilityUnassigned updates the matching feed row', async () => {
+      await service.handleVmVulnerabilityUnassigned({
+        ...unassignedPayload,
+        source: ModuleName.VM,
+        recordId: 'vuln-1',
+      });
+
+      expect(mockPrismaService.assetFeedEntry.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            source: ModuleName.VM,
+            sourceId: 'vuln-1',
+          }),
+          data: { status: 'OPEN', assignedToUserId: null },
+        }),
+      );
+    });
+  });
+
   describe('getUnifiedFeed', () => {
     const baseFilters = { tenantId: 'tenant-1' };
 
@@ -392,6 +492,21 @@ describe('AssetService', () => {
             severity: Severity.CRITICAL,
             timestamp: { gte: dateFrom, lte: dateTo },
           },
+        }),
+      );
+    });
+
+    it('filters by assignedToUserId when provided', async () => {
+      mockPrismaService.assetFeedEntry.findMany.mockResolvedValue([]);
+
+      await service.getUnifiedFeed('tenant-1', {
+        tenantId: 'tenant-1',
+        assignedToUserId: 'analyst-1',
+      });
+
+      expect(mockPrismaService.assetFeedEntry.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { tenantId: 'tenant-1', assignedToUserId: 'analyst-1' },
         }),
       );
     });

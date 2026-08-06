@@ -83,8 +83,11 @@ describe('EdrController (e2e)', () => {
 
   const mockEdrService = {
     listEndpoints: jest.fn(),
+    updateEndpoint: jest.fn(),
+    deleteEndpoint: jest.fn(),
     query: jest.fn(),
     assignDetection: jest.fn(),
+    unassignDetection: jest.fn(),
     updateDetectionStatus: jest.fn(),
     ingest: jest.fn(),
   };
@@ -173,6 +176,66 @@ describe('EdrController (e2e)', () => {
     });
   });
 
+  describe('PATCH /edr/endpoints/:id', () => {
+    it('allows an Analyst to update an endpoint', async () => {
+      const token = await loginAs(analystUser.email);
+      mockEdrService.updateEndpoint.mockResolvedValue({
+        id: 'endpoint-1',
+        tenantId: 'tenant-1',
+      });
+
+      await request(app.getHttpServer())
+        .patch('/api/edr/endpoints/endpoint-1')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ hostname: 'renamed-host' })
+        .expect(200);
+
+      expect(mockEdrService.updateEndpoint).toHaveBeenCalledWith(
+        'tenant-1',
+        'endpoint-1',
+        { hostname: 'renamed-host' },
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .patch('/api/edr/endpoints/endpoint-1')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ hostname: 'x' })
+        .expect(403);
+      expect(mockEdrService.updateEndpoint).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DELETE /edr/endpoints/:id', () => {
+    it('allows an Analyst to delete an endpoint', async () => {
+      const token = await loginAs(analystUser.email);
+      mockEdrService.deleteEndpoint.mockResolvedValue(undefined);
+
+      await request(app.getHttpServer())
+        .delete('/api/edr/endpoints/endpoint-1')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(mockEdrService.deleteEndpoint).toHaveBeenCalledWith(
+        'tenant-1',
+        'endpoint-1',
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .delete('/api/edr/endpoints/endpoint-1')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      expect(mockEdrService.deleteEndpoint).not.toHaveBeenCalled();
+    });
+  });
+
   describe('GET /edr/detections', () => {
     it('allows any authenticated tenant role and merges tenantId into the query', async () => {
       const token = await loginAs(viewerUser.email);
@@ -232,6 +295,37 @@ describe('EdrController (e2e)', () => {
         .send({})
         .expect(403);
       expect(mockEdrService.assignDetection).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DELETE /edr/detections/:id/assign', () => {
+    it('allows an Analyst to unassign', async () => {
+      const token = await loginAs(analystUser.email);
+      mockEdrService.unassignDetection.mockResolvedValue({
+        id: 'detection-1',
+        status: EdrDetectionStatus.OPEN,
+      });
+
+      await request(app.getHttpServer())
+        .delete('/api/edr/detections/detection-1/assign')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(mockEdrService.unassignDetection).toHaveBeenCalledWith(
+        'tenant-1',
+        'detection-1',
+        expect.objectContaining({ role: UserRole.ANALYST }),
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .delete('/api/edr/detections/detection-1/assign')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      expect(mockEdrService.unassignDetection).not.toHaveBeenCalled();
     });
   });
 

@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { Prisma, VmVulnerability, VmAsset } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -9,7 +14,10 @@ import {
   ModuleHealth,
   UnifiedEvent,
 } from '../common/security-module/types';
-import { resolveAssignee } from '../common/assignment';
+import {
+  resolveAssignee,
+  assertCanTransitionStatus,
+} from '../common/assignment';
 import type { AuthenticatedUser } from '../auth/jwt.strategy';
 
 export interface VmQueryFilters extends BaseQueryFilters {
@@ -70,6 +78,7 @@ export class VmService implements SecurityModule<
     const {
       tenantId,
       severity,
+      assignedToUserId,
       dateFrom,
       dateTo,
       page = 1,
@@ -83,6 +92,7 @@ export class VmService implements SecurityModule<
       ...(severity && { severity }),
       ...(assetId && { assetId }),
       ...(status && { status }),
+      ...(assignedToUserId && { assignedToUserId }),
       ...((dateFrom || dateTo) && {
         createdAt: {
           ...(dateFrom && { gte: dateFrom }),
@@ -137,6 +147,43 @@ export class VmService implements SecurityModule<
     });
   }
 
+  async updateAsset(
+    tenantId: string,
+    id: string,
+    dto: { name?: string; ip?: string; type?: string },
+  ): Promise<VmAsset> {
+    const asset = await this.prisma.vmAsset.findUnique({ where: { id } });
+    if (!asset || asset.tenantId !== tenantId) {
+      throw new NotFoundException('Asset not found');
+    }
+
+    return this.prisma.vmAsset.update({ where: { id }, data: dto });
+  }
+
+  // VmVulnerability.assetId RESTRICTs on this table, so a hard delete is
+  // only allowed once no vulnerability references it — same guard shape as
+  // SoarService.deletePlaybook and EdrService.deleteEndpoint. Unlike
+  // EdrEndpoint, VmAsset has no status/lifecycle field to fall back to —
+  // remediating or accepting-risk on the associated vulnerabilities first
+  // is the only path to freeing an asset up for deletion.
+  async deleteAsset(tenantId: string, id: string): Promise<void> {
+    const asset = await this.prisma.vmAsset.findUnique({ where: { id } });
+    if (!asset || asset.tenantId !== tenantId) {
+      throw new NotFoundException('Asset not found');
+    }
+
+    const vulnerabilityCount = await this.prisma.vmVulnerability.count({
+      where: { assetId: id },
+    });
+    if (vulnerabilityCount > 0) {
+      throw new ConflictException(
+        'Cannot delete an asset that has associated vulnerabilities',
+      );
+    }
+
+    await this.prisma.vmAsset.delete({ where: { id } });
+  }
+
   async updateVulnerabilityStatus(
     tenantId: string,
     id: string,
@@ -189,6 +236,43 @@ export class VmService implements SecurityModule<
       source: ModuleName.VM,
       recordId: updated.id,
       assignedToUserId: assigneeId,
+      status: updated.status,
+      timestamp: new Date(),
+    });
+
+    return updated;
+  }
+
+  // No status to revert here (assignment never touched it) — just clears
+  // the assignee. Still gated by assertCanTransitionStatus: only the
+  // current assignee or an Admin can hand it back.
+  async unassignVulnerability(
+    tenantId: string,
+    id: string,
+    caller: AuthenticatedUser,
+  ): Promise<VmVulnerability> {
+    const vulnerability = await this.prisma.vmVulnerability.findUnique({
+      where: { id },
+    });
+    if (!vulnerability || vulnerability.tenantId !== tenantId) {
+      throw new NotFoundException('Vulnerability not found');
+    }
+
+    assertCanTransitionStatus(caller, vulnerability.assignedToUserId);
+
+    if (!vulnerability.assignedToUserId) {
+      throw new ConflictException('Vulnerability is not currently assigned');
+    }
+
+    const updated = await this.prisma.vmVulnerability.update({
+      where: { id },
+      data: { assignedToUserId: null },
+    });
+
+    this.eventEmitter.emit('vm.vulnerability.unassigned', {
+      tenantId,
+      source: ModuleName.VM,
+      recordId: updated.id,
       status: updated.status,
       timestamp: new Date(),
     });

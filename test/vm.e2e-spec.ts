@@ -88,9 +88,12 @@ describe('VmController (e2e)', () => {
   const mockVmService = {
     listAssets: jest.fn(),
     createAsset: jest.fn(),
+    updateAsset: jest.fn(),
+    deleteAsset: jest.fn(),
     query: jest.fn(),
     updateVulnerabilityStatus: jest.fn(),
     assignVulnerability: jest.fn(),
+    unassignVulnerability: jest.fn(),
     ingest: jest.fn(),
   };
 
@@ -249,6 +252,66 @@ describe('VmController (e2e)', () => {
     });
   });
 
+  describe('PATCH /vm/assets/:id', () => {
+    it('allows an Analyst to update an asset', async () => {
+      const token = await loginAs(analystUser.email);
+      mockVmService.updateAsset.mockResolvedValue({
+        id: 'asset-1',
+        tenantId: 'tenant-1',
+      });
+
+      await request(app.getHttpServer())
+        .patch('/api/vm/assets/asset-1')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'renamed-asset' })
+        .expect(200);
+
+      expect(mockVmService.updateAsset).toHaveBeenCalledWith(
+        'tenant-1',
+        'asset-1',
+        { name: 'renamed-asset' },
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .patch('/api/vm/assets/asset-1')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'x' })
+        .expect(403);
+      expect(mockVmService.updateAsset).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DELETE /vm/assets/:id', () => {
+    it('allows an Analyst to delete an asset', async () => {
+      const token = await loginAs(analystUser.email);
+      mockVmService.deleteAsset.mockResolvedValue(undefined);
+
+      await request(app.getHttpServer())
+        .delete('/api/vm/assets/asset-1')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(mockVmService.deleteAsset).toHaveBeenCalledWith(
+        'tenant-1',
+        'asset-1',
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .delete('/api/vm/assets/asset-1')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      expect(mockVmService.deleteAsset).not.toHaveBeenCalled();
+    });
+  });
+
   describe('GET /vm/vulnerabilities', () => {
     it('allows any authenticated tenant role and merges tenantId into the query', async () => {
       const token = await loginAs(viewerUser.email);
@@ -365,6 +428,37 @@ describe('VmController (e2e)', () => {
         .send({})
         .expect(403);
       expect(mockVmService.assignVulnerability).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DELETE /vm/vulnerabilities/:id/assign', () => {
+    it('allows an Analyst to unassign', async () => {
+      const token = await loginAs(analystUser.email);
+      mockVmService.unassignVulnerability.mockResolvedValue({
+        id: 'vuln-1',
+        assignedToUserId: null,
+      });
+
+      await request(app.getHttpServer())
+        .delete('/api/vm/vulnerabilities/vuln-1/assign')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(mockVmService.unassignVulnerability).toHaveBeenCalledWith(
+        'tenant-1',
+        'vuln-1',
+        expect.objectContaining({ role: UserRole.ANALYST }),
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .delete('/api/vm/vulnerabilities/vuln-1/assign')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      expect(mockVmService.unassignVulnerability).not.toHaveBeenCalled();
     });
   });
 

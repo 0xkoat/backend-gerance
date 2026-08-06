@@ -16,8 +16,11 @@ import { AssignDto } from '../common/dto/assign.dto';
 
 const mockEdrService = {
   listEndpoints: jest.fn(),
+  updateEndpoint: jest.fn(),
+  deleteEndpoint: jest.fn(),
   query: jest.fn(),
   assignDetection: jest.fn(),
+  unassignDetection: jest.fn(),
   updateDetectionStatus: jest.fn(),
   ingest: jest.fn(),
 };
@@ -80,6 +83,51 @@ describe('EdrController', () => {
     });
   });
 
+  describe('updateEndpoint', () => {
+    it('passes the tenant and id to the service', async () => {
+      const updated = { id: 'endpoint-1', tenantId: 'tenant-1' };
+      mockEdrService.updateEndpoint.mockResolvedValue(updated);
+
+      const result = await controller.updateEndpoint(analyst, 'endpoint-1', {
+        hostname: 'renamed',
+      });
+
+      expect(result).toEqual(updated);
+      expect(mockEdrService.updateEndpoint).toHaveBeenCalledWith(
+        'tenant-1',
+        'endpoint-1',
+        { hostname: 'renamed' },
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      await expect(
+        controller.updateEndpoint(noTenantAdmin, 'endpoint-1', {}),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockEdrService.updateEndpoint).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteEndpoint', () => {
+    it('passes the tenant and id to the service', async () => {
+      mockEdrService.deleteEndpoint.mockResolvedValue(undefined);
+
+      await controller.deleteEndpoint(analyst, 'endpoint-1');
+
+      expect(mockEdrService.deleteEndpoint).toHaveBeenCalledWith(
+        'tenant-1',
+        'endpoint-1',
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      await expect(
+        controller.deleteEndpoint(noTenantAdmin, 'endpoint-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockEdrService.deleteEndpoint).not.toHaveBeenCalled();
+    });
+  });
+
   describe('queryDetections', () => {
     it('merges the query params with the caller tenantId', async () => {
       const query: EdrQueryDto = {
@@ -132,6 +180,29 @@ describe('EdrController', () => {
         controller.assignDetection(noTenantAdmin, 'detection-1', dto),
       ).rejects.toThrow(ForbiddenException);
       expect(mockEdrService.assignDetection).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('unassignDetection', () => {
+    it('passes the caller to the service', async () => {
+      const updated = { id: 'detection-1', status: EdrDetectionStatus.OPEN };
+      mockEdrService.unassignDetection.mockResolvedValue(updated);
+
+      const result = await controller.unassignDetection(analyst, 'detection-1');
+
+      expect(result).toEqual(updated);
+      expect(mockEdrService.unassignDetection).toHaveBeenCalledWith(
+        'tenant-1',
+        'detection-1',
+        analyst,
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      await expect(
+        controller.unassignDetection(noTenantAdmin, 'detection-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockEdrService.unassignDetection).not.toHaveBeenCalled();
     });
   });
 

@@ -95,6 +95,7 @@ export class EdrService implements SecurityModule<
     const {
       tenantId,
       severity,
+      assignedToUserId,
       dateFrom,
       dateTo,
       page = 1,
@@ -106,6 +107,7 @@ export class EdrService implements SecurityModule<
       tenantId,
       ...(severity && { severity }),
       ...(endpointId && { endpointId }),
+      ...(assignedToUserId && { assignedToUserId }),
       ...((dateFrom || dateTo) && {
         createdAt: {
           ...(dateFrom && { gte: dateFrom }),
@@ -146,6 +148,51 @@ export class EdrService implements SecurityModule<
     });
   }
 
+  async updateEndpoint(
+    tenantId: string,
+    id: string,
+    dto: {
+      hostname?: string;
+      ip?: string;
+      os?: string;
+      status?: EdrEndpointStatus;
+    },
+  ): Promise<EdrEndpoint> {
+    const endpoint = await this.prisma.edrEndpoint.findUnique({
+      where: { id },
+    });
+    if (!endpoint || endpoint.tenantId !== tenantId) {
+      throw new NotFoundException('Endpoint not found');
+    }
+
+    return this.prisma.edrEndpoint.update({ where: { id }, data: dto });
+  }
+
+  // EdrDetection.endpointId RESTRICTs on this table, so a hard delete is
+  // only allowed once no detection references it — mirroring
+  // SoarService.deletePlaybook's execution-count guard. DECOMMISSIONED (the
+  // status enum's fourth value, added alongside this) is the intended path
+  // for retiring a host that still has detection history.
+  async deleteEndpoint(tenantId: string, id: string): Promise<void> {
+    const endpoint = await this.prisma.edrEndpoint.findUnique({
+      where: { id },
+    });
+    if (!endpoint || endpoint.tenantId !== tenantId) {
+      throw new NotFoundException('Endpoint not found');
+    }
+
+    const detectionCount = await this.prisma.edrDetection.count({
+      where: { endpointId: id },
+    });
+    if (detectionCount > 0) {
+      throw new ConflictException(
+        'Cannot delete an endpoint that has existing detections — mark it DECOMMISSIONED instead (PATCH with status)',
+      );
+    }
+
+    await this.prisma.edrEndpoint.delete({ where: { id } });
+  }
+
   async assignDetection(
     tenantId: string,
     id: string,
@@ -179,6 +226,42 @@ export class EdrService implements SecurityModule<
       source: ModuleName.EDR,
       recordId: updated.id,
       assignedToUserId: assigneeId,
+      status: updated.status,
+      timestamp: new Date(),
+    });
+
+    return updated;
+  }
+
+  async unassignDetection(
+    tenantId: string,
+    id: string,
+    caller: AuthenticatedUser,
+  ): Promise<EdrDetection> {
+    const detection = await this.prisma.edrDetection.findUnique({
+      where: { id },
+    });
+    if (!detection || detection.tenantId !== tenantId) {
+      throw new NotFoundException('Detection not found');
+    }
+
+    assertCanTransitionStatus(caller, detection.assignedToUserId);
+
+    if (!TRANSITIONABLE_STATUSES.includes(detection.status)) {
+      throw new ConflictException(
+        'Detection must be currently assigned and not yet resolved to be unassigned',
+      );
+    }
+
+    const updated = await this.prisma.edrDetection.update({
+      where: { id },
+      data: { assignedToUserId: null, status: EdrDetectionStatus.OPEN },
+    });
+
+    this.eventEmitter.emit('edr.detection.unassigned', {
+      tenantId,
+      source: ModuleName.EDR,
+      recordId: updated.id,
       status: updated.status,
       timestamp: new Date(),
     });

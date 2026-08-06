@@ -1,21 +1,30 @@
 import { Type } from 'class-transformer';
 import {
+  IsBoolean,
   IsNotEmpty,
   IsObject,
+  IsOptional,
   IsString,
   ValidateNested,
 } from 'class-validator';
 import { TriggerConditionDto } from './triggerCondition.dto';
 
-export class CreateSoarPlaybookDto {
+export class UpdateSoarPlaybookDto {
+  @IsOptional()
   @IsString()
   @IsNotEmpty()
-  name!: string;
+  name?: string;
 
+  @IsOptional()
   @ValidateNested()
   @Type(() => TriggerConditionDto)
-  triggerCondition!: TriggerConditionDto;
+  triggerCondition?: TriggerConditionDto;
 
+  @IsOptional()
   @IsObject()
-  actions!: object;
+  actions?: object;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
 }

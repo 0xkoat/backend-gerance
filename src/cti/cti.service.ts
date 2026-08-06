@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Prisma, CtiIoc } from '../generated/prisma/client';
 import { CtiIocType, ModuleName, Severity } from '../generated/prisma/enums';
@@ -70,6 +70,35 @@ export class CtiService implements SecurityModule<CtiIoc, CtiQueryFilters> {
 
   async checkMatch(tenantId: string, value: string): Promise<CtiIoc | null> {
     return this.prisma.ctiIoc.findFirst({ where: { tenantId, value } });
+  }
+
+  async updateIoc(
+    tenantId: string,
+    id: string,
+    dto: { confidence?: number; source?: string },
+  ): Promise<CtiIoc> {
+    const ioc = await this.prisma.ctiIoc.findUnique({ where: { id } });
+    if (!ioc || ioc.tenantId !== tenantId) {
+      throw new NotFoundException('IOC not found');
+    }
+
+    return this.prisma.ctiIoc.update({ where: { id }, data: dto });
+  }
+
+  async deleteIoc(tenantId: string, id: string): Promise<void> {
+    const ioc = await this.prisma.ctiIoc.findUnique({ where: { id } });
+    if (!ioc || ioc.tenantId !== tenantId) {
+      throw new NotFoundException('IOC not found');
+    }
+
+    await this.prisma.ctiIoc.delete({ where: { id } });
+
+    this.eventEmitter.emit('cti.ioc.deleted', {
+      tenantId,
+      source: ModuleName.CTI,
+      recordId: id,
+      timestamp: new Date(),
+    });
   }
 
   @OnEvent('siem.alert.created')

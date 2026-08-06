@@ -18,8 +18,10 @@ const mockDfirService = {
   query: jest.fn(),
   getIncidentDetail: jest.fn(),
   assignIncident: jest.fn(),
+  unassignIncident: jest.fn(),
   updateStatus: jest.fn(),
   linkRecord: jest.fn(),
+  unlinkRecord: jest.fn(),
 };
 
 describe('DfirController', () => {
@@ -131,6 +133,29 @@ describe('DfirController', () => {
     });
   });
 
+  describe('unassignIncident', () => {
+    it('passes the caller to the service', async () => {
+      const updated = { id: 'incident-1', status: DfirIncidentStatus.OPEN };
+      mockDfirService.unassignIncident.mockResolvedValue(updated);
+
+      const result = await controller.unassignIncident(analyst, 'incident-1');
+
+      expect(result).toEqual(updated);
+      expect(mockDfirService.unassignIncident).toHaveBeenCalledWith(
+        'tenant-1',
+        'incident-1',
+        analyst,
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      await expect(
+        controller.unassignIncident(noTenantAdmin, 'incident-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockDfirService.unassignIncident).not.toHaveBeenCalled();
+    });
+  });
+
   describe('updateStatus', () => {
     const dto: UpdateDfirIncidentStatusDto = {
       status: DfirIncidentStatus.RESOLVED,
@@ -185,6 +210,27 @@ describe('DfirController', () => {
         controller.createLink(noTenantAdmin, 'incident-1', dto),
       ).rejects.toThrow(ForbiddenException);
       expect(mockDfirService.linkRecord).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteLink', () => {
+    it('unlinks a record via the service', async () => {
+      mockDfirService.unlinkRecord.mockResolvedValue(undefined);
+
+      await controller.deleteLink(analyst, 'incident-1', 'link-1');
+
+      expect(mockDfirService.unlinkRecord).toHaveBeenCalledWith(
+        'tenant-1',
+        'incident-1',
+        'link-1',
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      await expect(
+        controller.deleteLink(noTenantAdmin, 'incident-1', 'link-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockDfirService.unlinkRecord).not.toHaveBeenCalled();
     });
   });
 });

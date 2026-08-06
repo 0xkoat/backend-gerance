@@ -5,6 +5,7 @@ import {
   Body,
   Param,
   Patch,
+  Delete,
   Query,
 } from '@nestjs/common';
 import { Roles } from '../auth/decorators/roles.decorator';
@@ -56,6 +57,16 @@ export class DfirController {
     );
   }
 
+  @Delete('incidents/:id/assign')
+  @Roles(UserRole.ADMIN, UserRole.ANALYST)
+  async unassignIncident(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    const tenantId = requireTenantId(user);
+    return this.dfirService.unassignIncident(tenantId, id, user);
+  }
+
   @Patch('incidents/:id/status')
   @Roles(UserRole.ADMIN, UserRole.ANALYST)
   async updateStatus(
@@ -86,5 +97,16 @@ export class DfirController {
       createDfirLinkDto.sourceType,
       createDfirLinkDto.sourceId,
     );
+  }
+
+  @Delete('incidents/:id/links/:linkId')
+  @Roles(UserRole.ADMIN, UserRole.ANALYST)
+  async deleteLink(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Param('linkId') linkId: string,
+  ) {
+    const tenantId = requireTenantId(user);
+    await this.dfirService.unlinkRecord(tenantId, id, linkId);
   }
 }
