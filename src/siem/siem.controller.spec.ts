@@ -12,10 +12,12 @@ import type { AuthenticatedUser } from '../auth/jwt.strategy';
 import { IngestSiemEventDto } from './dto/ingestSiemEvent.dto';
 import { UpdateSiemAlertStatusDto } from './dto/updateSiemAlertStatus.dto';
 import { SiemQueryDto } from './dto/siemQuery.dto';
+import { AssignDto } from '../common/dto/assign.dto';
 
 const mockSiemService = {
   listLogs: jest.fn(),
   query: jest.fn(),
+  assignAlert: jest.fn(),
   updateAlertStatus: jest.fn(),
   ingest: jest.fn(),
 };
@@ -103,10 +105,38 @@ describe('SiemController', () => {
     });
   });
 
+  describe('assignAlert', () => {
+    const dto: AssignDto = {};
+
+    it('passes the caller and requested assignee to the service', async () => {
+      const updated = { id: 'alert-1', status: SiemAlertStatus.ASSIGNED };
+      mockSiemService.assignAlert.mockResolvedValue(updated);
+
+      const result = await controller.assignAlert(analyst, 'alert-1', {
+        assignedToUserId: 'analyst-2',
+      });
+
+      expect(result).toEqual(updated);
+      expect(mockSiemService.assignAlert).toHaveBeenCalledWith(
+        'tenant-1',
+        'alert-1',
+        analyst,
+        'analyst-2',
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      await expect(
+        controller.assignAlert(noTenantAdmin, 'alert-1', dto),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockSiemService.assignAlert).not.toHaveBeenCalled();
+    });
+  });
+
   describe('updateAlertStatus', () => {
     const dto: UpdateSiemAlertStatusDto = { status: SiemAlertStatus.RESOLVED };
 
-    it('passes the status and assignedToUserId to the service', async () => {
+    it('passes the caller and status to the service', async () => {
       const updated = { id: 'alert-1', status: SiemAlertStatus.RESOLVED };
       mockSiemService.updateAlertStatus.mockResolvedValue(updated);
 
@@ -120,8 +150,8 @@ describe('SiemController', () => {
       expect(mockSiemService.updateAlertStatus).toHaveBeenCalledWith(
         'tenant-1',
         'alert-1',
+        analyst,
         SiemAlertStatus.RESOLVED,
-        undefined,
       );
     });
 

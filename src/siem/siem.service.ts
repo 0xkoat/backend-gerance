@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { Prisma, SiemAlert, SiemLog } from '../generated/prisma/client';
 import {
@@ -16,6 +21,16 @@ import type {
   CtiEnrichmentPayload,
   UnifiedEvent,
 } from '../common/security-module/types';
+import {
+  resolveAssignee,
+  assertCanTransitionStatus,
+} from '../common/assignment';
+import type { AuthenticatedUser } from '../auth/jwt.strategy';
+
+const TRANSITIONABLE_STATUSES: SiemAlertStatus[] = [
+  SiemAlertStatus.ASSIGNED,
+  SiemAlertStatus.ESCALATED,
+];
 
 export interface SiemQueryFilters extends BaseQueryFilters {
   status?: SiemAlertStatus;
@@ -149,20 +164,76 @@ export class SiemService implements SecurityModule<
     });
   }
 
-  async updateAlertStatus(
+  async assignAlert(
     tenantId: string,
     id: string,
-    status: SiemAlertStatus,
-    assignedToUserId?: string,
+    caller: AuthenticatedUser,
+    requestedAssigneeId: string | undefined,
   ): Promise<SiemAlert> {
     const alert = await this.prisma.siemAlert.findUnique({ where: { id } });
     if (!alert || alert.tenantId !== tenantId) {
       throw new NotFoundException('Alert not found');
     }
 
-    return this.prisma.siemAlert.update({
+    const assigneeId = await resolveAssignee(
+      this.prisma,
+      caller,
+      tenantId,
+      requestedAssigneeId,
+    );
+
+    const updated = await this.prisma.siemAlert.update({
       where: { id },
-      data: { status, ...(assignedToUserId && { assignedToUserId }) },
+      data: {
+        assignedToUserId: assigneeId,
+        status: SiemAlertStatus.ASSIGNED,
+      },
     });
+
+    this.eventEmitter.emit('siem.alert.assigned', {
+      tenantId,
+      source: ModuleName.SIEM,
+      recordId: updated.id,
+      assignedToUserId: assigneeId,
+      status: updated.status,
+      timestamp: new Date(),
+    });
+
+    return updated;
+  }
+
+  async updateAlertStatus(
+    tenantId: string,
+    id: string,
+    caller: AuthenticatedUser,
+    status: SiemAlertStatus,
+  ): Promise<SiemAlert> {
+    const alert = await this.prisma.siemAlert.findUnique({ where: { id } });
+    if (!alert || alert.tenantId !== tenantId) {
+      throw new NotFoundException('Alert not found');
+    }
+
+    assertCanTransitionStatus(caller, alert.assignedToUserId);
+
+    if (!TRANSITIONABLE_STATUSES.includes(alert.status)) {
+      throw new ConflictException(
+        'Alert must be assigned before it can be escalated or resolved',
+      );
+    }
+
+    const updated = await this.prisma.siemAlert.update({
+      where: { id },
+      data: { status },
+    });
+
+    this.eventEmitter.emit('siem.alert.status_changed', {
+      tenantId,
+      source: ModuleName.SIEM,
+      recordId: updated.id,
+      status: updated.status,
+      timestamp: new Date(),
+    });
+
+    return updated;
   }
 }

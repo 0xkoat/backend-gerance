@@ -90,6 +90,7 @@ describe('VmController (e2e)', () => {
     createAsset: jest.fn(),
     query: jest.fn(),
     updateVulnerabilityStatus: jest.fn(),
+    assignVulnerability: jest.fn(),
     ingest: jest.fn(),
   };
 
@@ -124,7 +125,9 @@ describe('VmController (e2e)', () => {
       .useValue({
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
-        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
+        refreshToken: {
+          create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+        },
       })
       .compile();
 
@@ -328,6 +331,40 @@ describe('VmController (e2e)', () => {
         .send({ status: 'NOT_A_STATUS' })
         .expect(400);
       expect(mockVmService.updateVulnerabilityStatus).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('POST /vm/vulnerabilities/:id/assign', () => {
+    it('allows an Analyst to self-assign', async () => {
+      const token = await loginAs(analystUser.email);
+      mockVmService.assignVulnerability.mockResolvedValue({
+        id: 'vuln-1',
+        assignedToUserId: 'analyst-1',
+      });
+
+      await request(app.getHttpServer())
+        .post('/api/vm/vulnerabilities/vuln-1/assign')
+        .set('Authorization', `Bearer ${token}`)
+        .send({})
+        .expect(201);
+
+      expect(mockVmService.assignVulnerability).toHaveBeenCalledWith(
+        'tenant-1',
+        'vuln-1',
+        expect.objectContaining({ role: UserRole.ANALYST }),
+        undefined,
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .post('/api/vm/vulnerabilities/vuln-1/assign')
+        .set('Authorization', `Bearer ${token}`)
+        .send({})
+        .expect(403);
+      expect(mockVmService.assignVulnerability).not.toHaveBeenCalled();
     });
   });
 

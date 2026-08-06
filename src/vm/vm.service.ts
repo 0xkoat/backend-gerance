@@ -9,6 +9,8 @@ import {
   ModuleHealth,
   UnifiedEvent,
 } from '../common/security-module/types';
+import { resolveAssignee } from '../common/assignment';
+import type { AuthenticatedUser } from '../auth/jwt.strategy';
 
 export interface VmQueryFilters extends BaseQueryFilters {
   assetId?: string;
@@ -152,5 +154,45 @@ export class VmService implements SecurityModule<
       where: { id },
       data: { status },
     });
+  }
+
+  async assignVulnerability(
+    tenantId: string,
+    id: string,
+    caller: AuthenticatedUser,
+    requestedAssigneeId: string | undefined,
+  ): Promise<VmVulnerability> {
+    const vulnerability = await this.prisma.vmVulnerability.findUnique({
+      where: { id },
+    });
+    if (!vulnerability || vulnerability.tenantId !== tenantId) {
+      throw new NotFoundException('Vulnerability not found');
+    }
+
+    const assigneeId = await resolveAssignee(
+      this.prisma,
+      caller,
+      tenantId,
+      requestedAssigneeId,
+    );
+
+    const updated = await this.prisma.vmVulnerability.update({
+      where: { id },
+      data: { assignedToUserId: assigneeId },
+    });
+
+    // Assignment doesn't move VmVulnerability's own remediation status (see
+    // the module-scope decision in CLAUDE.md) — the emitted status is just
+    // whatever the record's current remediation status already was.
+    this.eventEmitter.emit('vm.vulnerability.assigned', {
+      tenantId,
+      source: ModuleName.VM,
+      recordId: updated.id,
+      assignedToUserId: assigneeId,
+      status: updated.status,
+      timestamp: new Date(),
+    });
+
+    return updated;
   }
 }

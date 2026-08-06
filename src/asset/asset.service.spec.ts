@@ -2,12 +2,17 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { AssetService } from './asset.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { ModuleName, Severity } from '../generated/prisma/enums';
-import { UnifiedEvent } from '../common/security-module/types';
+import {
+  UnifiedEvent,
+  RecordAssignedPayload,
+  RecordStatusChangedPayload,
+} from '../common/security-module/types';
 
 const mockPrismaService = {
   assetFeedEntry: {
     create: jest.fn(),
     findMany: jest.fn(),
+    updateMany: jest.fn(),
   },
 };
 
@@ -55,6 +60,8 @@ describe('AssetService', () => {
           source: ModuleName.EDR,
           type: 'detection',
           severity: Severity.HIGH,
+          status: 'OPEN',
+          assignedToUserId: null,
           timestamp,
           summary: 'Suspicious PowerShell execution chain on web-server-1',
           sourceId: 'detection-1',
@@ -86,6 +93,8 @@ describe('AssetService', () => {
           source: ModuleName.SIEM,
           type: 'alert',
           severity: Severity.HIGH,
+          status: 'OPEN',
+          assignedToUserId: null,
           timestamp,
           summary: 'Suspicious PowerShell execution chain on web-server-1',
           sourceId: 'alert-1',
@@ -146,6 +155,8 @@ describe('AssetService', () => {
           source: ModuleName.VM,
           type: 'vulnerability',
           severity: Severity.MEDIUM,
+          status: 'OPEN',
+          assignedToUserId: null,
           timestamp,
           summary: 'Outdated OpenSSL version',
           sourceId: 'vuln-1',
@@ -206,10 +217,142 @@ describe('AssetService', () => {
           source: ModuleName.DFIR,
           type: 'incident',
           severity: Severity.CRITICAL,
+          status: 'OPEN',
+          assignedToUserId: null,
           timestamp,
           summary: 'Incident: Outbound C2 beaconing',
           sourceId: 'incident-1',
         },
+      });
+    });
+  });
+
+  describe('assigned/status_changed listeners', () => {
+    const assignedPayload: RecordAssignedPayload = {
+      tenantId: 'tenant-1',
+      source: ModuleName.SIEM,
+      recordId: 'alert-1',
+      assignedToUserId: 'analyst-1',
+      status: 'ASSIGNED',
+      timestamp: new Date('2026-08-06T10:00:00Z'),
+    };
+    const statusChangedPayload: RecordStatusChangedPayload = {
+      tenantId: 'tenant-1',
+      source: ModuleName.SIEM,
+      recordId: 'alert-1',
+      status: 'RESOLVED',
+      timestamp: new Date('2026-08-06T10:05:00Z'),
+    };
+
+    it('handleSiemAlertAssigned updates the matching feed row by source+sourceId+tenantId', async () => {
+      await service.handleSiemAlertAssigned(assignedPayload);
+
+      expect(mockPrismaService.assetFeedEntry.updateMany).toHaveBeenCalledWith({
+        where: {
+          tenantId: 'tenant-1',
+          source: ModuleName.SIEM,
+          sourceId: 'alert-1',
+        },
+        data: { status: 'ASSIGNED', assignedToUserId: 'analyst-1' },
+      });
+    });
+
+    it('handleSiemAlertStatusChanged updates only the status field', async () => {
+      await service.handleSiemAlertStatusChanged(statusChangedPayload);
+
+      expect(mockPrismaService.assetFeedEntry.updateMany).toHaveBeenCalledWith({
+        where: {
+          tenantId: 'tenant-1',
+          source: ModuleName.SIEM,
+          sourceId: 'alert-1',
+        },
+        data: { status: 'RESOLVED' },
+      });
+    });
+
+    it('handleEdrDetectionAssigned updates the matching feed row', async () => {
+      await service.handleEdrDetectionAssigned({
+        ...assignedPayload,
+        source: ModuleName.EDR,
+        recordId: 'detection-1',
+      });
+
+      expect(mockPrismaService.assetFeedEntry.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            source: ModuleName.EDR,
+            sourceId: 'detection-1',
+          }),
+        }),
+      );
+    });
+
+    it('handleEdrDetectionStatusChanged updates the matching feed row', async () => {
+      await service.handleEdrDetectionStatusChanged({
+        ...statusChangedPayload,
+        source: ModuleName.EDR,
+        recordId: 'detection-1',
+      });
+
+      expect(mockPrismaService.assetFeedEntry.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            source: ModuleName.EDR,
+            sourceId: 'detection-1',
+          }),
+        }),
+      );
+    });
+
+    it('handleDfirIncidentAssigned updates the matching feed row', async () => {
+      await service.handleDfirIncidentAssigned({
+        ...assignedPayload,
+        source: ModuleName.DFIR,
+        recordId: 'incident-1',
+      });
+
+      expect(mockPrismaService.assetFeedEntry.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            source: ModuleName.DFIR,
+            sourceId: 'incident-1',
+          }),
+        }),
+      );
+    });
+
+    it('handleDfirIncidentStatusChanged updates the matching feed row', async () => {
+      await service.handleDfirIncidentStatusChanged({
+        ...statusChangedPayload,
+        source: ModuleName.DFIR,
+        recordId: 'incident-1',
+      });
+
+      expect(mockPrismaService.assetFeedEntry.updateMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            source: ModuleName.DFIR,
+            sourceId: 'incident-1',
+          }),
+        }),
+      );
+    });
+
+    it('handleVmVulnerabilityAssigned updates the matching feed row', async () => {
+      await service.handleVmVulnerabilityAssigned({
+        ...assignedPayload,
+        source: ModuleName.VM,
+        recordId: 'vuln-1',
+        status: 'OPEN',
+      });
+
+      expect(mockPrismaService.assetFeedEntry.updateMany).toHaveBeenCalledWith({
+        where: {
+          tenantId: 'tenant-1',
+          source: ModuleName.VM,
+          sourceId: 'vuln-1',
+        },
+        data: { status: 'OPEN', assignedToUserId: 'analyst-1' },
       });
     });
   });

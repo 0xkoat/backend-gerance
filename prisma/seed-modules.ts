@@ -15,6 +15,7 @@ import {
   VmVulnerabilitiesStatus,
   CtiIocType,
   EdrEndpointStatus,
+  EdrDetectionStatus,
   SiemAlertStatus,
   SoarExecutionStatus,
   DfirIncidentStatus,
@@ -66,20 +67,94 @@ const OS_LIST = [
   'RHEL 9',
   'Debian 12',
 ];
-const DETECTION_NAMES = [
-  'Suspicious PowerShell execution chain',
-  'Outbound C2 beaconing detected',
-  'Ransomware-like file encryption behavior',
-  'Credential dumping attempt (LSASS access)',
-  'Living-off-the-land binary abuse',
-  'Unusual outbound data transfer volume',
-  'Privilege escalation via token manipulation',
-  'Suspicious scheduled task creation',
-  'Malicious macro execution in Office document',
-  'Known malware hash match',
-  'Lateral movement via SMB',
-  'Disabling of security tooling detected',
+
+// Each template pairs a record's title with the MITRE ATT&CK techniques it
+// plausibly involves and a narrative description referencing the specific
+// host/IP it fired against — this is what makes a seeded record read like a
+// real one instead of a bare title, closing the gap the assign/escalate/
+// resolve workflow was built to sit on top of.
+interface EnrichmentTemplate {
+  name: string;
+  mitre: string[];
+  describe: (hostname: string, ip: string) => string;
+}
+
+const DETECTION_TEMPLATES: EnrichmentTemplate[] = [
+  {
+    name: 'Suspicious PowerShell execution chain',
+    mitre: ['T1059.001', 'T1027'],
+    describe: (h, ip) =>
+      `An obfuscated PowerShell command chain executed on ${h} (${ip}), consistent with a fileless technique used to evade static detection.`,
+  },
+  {
+    name: 'Outbound C2 beaconing detected',
+    mitre: ['T1071', 'T1105'],
+    describe: (h, ip) =>
+      `${h} (${ip}) was observed making periodic outbound connections to known command-and-control infrastructure, indicating active beaconing from a compromised host.`,
+  },
+  {
+    name: 'Ransomware-like file encryption behavior',
+    mitre: ['T1486'],
+    describe: (h, ip) =>
+      `Mass file modification and encryption activity was detected on ${h} (${ip}), matching known ransomware behavioral patterns.`,
+  },
+  {
+    name: 'Credential dumping attempt (LSASS access)',
+    mitre: ['T1003.001'],
+    describe: (h, ip) =>
+      `A process on ${h} (${ip}) attempted to read LSASS process memory, a common technique for harvesting cached credentials.`,
+  },
+  {
+    name: 'Living-off-the-land binary abuse',
+    mitre: ['T1218'],
+    describe: (h, ip) =>
+      `A signed, native Windows binary on ${h} (${ip}) was used to proxy execution of unauthorized code, evading application allowlisting.`,
+  },
+  {
+    name: 'Unusual outbound data transfer volume',
+    mitre: ['T1041'],
+    describe: (h, ip) =>
+      `${h} (${ip}) transferred an anomalously large volume of data outbound over a short window, consistent with staged exfiltration.`,
+  },
+  {
+    name: 'Privilege escalation via token manipulation',
+    mitre: ['T1134'],
+    describe: (h, ip) =>
+      `A process on ${h} (${ip}) manipulated an access token to impersonate a higher-privileged security context.`,
+  },
+  {
+    name: 'Suspicious scheduled task creation',
+    mitre: ['T1053.005'],
+    describe: (h, ip) =>
+      `A scheduled task was created on ${h} (${ip}) under a non-standard name, a common persistence mechanism.`,
+  },
+  {
+    name: 'Malicious macro execution in Office document',
+    mitre: ['T1204.002', 'T1566'],
+    describe: (h, ip) =>
+      `A user on ${h} (${ip}) opened an Office document that executed an embedded macro, spawning a child process outside normal application behavior.`,
+  },
+  {
+    name: 'Known malware hash match',
+    mitre: ['T1204'],
+    describe: (h, ip) =>
+      `A file matching a known-malicious hash from threat intelligence feeds was written to disk on ${h} (${ip}).`,
+  },
+  {
+    name: 'Lateral movement via SMB',
+    mitre: ['T1021.002'],
+    describe: (h, ip) =>
+      `Authenticated SMB connections were used to move from a previously compromised host to ${h} (${ip}).`,
+  },
+  {
+    name: 'Disabling of security tooling detected',
+    mitre: ['T1562.001'],
+    describe: (h, ip) =>
+      `Endpoint protection services on ${h} (${ip}) were disabled or tampered with shortly before related detections.`,
+  },
 ];
+const DETECTION_NAMES = DETECTION_TEMPLATES.map((t) => t.name);
+
 const SIEM_SOURCES = ['firewall', 'ids', 'edr', 'vpn', 'proxy', 'dns', 'auth'];
 const SIEM_EVENT_TYPES = [
   'login',
@@ -89,16 +164,57 @@ const SIEM_EVENT_TYPES = [
   'dns_query',
   'auth_failure',
 ];
-const SIEM_ALERT_TITLES = [
-  'Multiple failed login attempts',
-  'Brute force attack detected',
-  'Privilege escalation attempt',
-  'Anomalous login location',
-  'Impossible travel login',
-  'Data exfiltration pattern detected',
-  'Malware callback detected',
-  'Unauthorized configuration change',
+const SIEM_ALERT_TEMPLATES: EnrichmentTemplate[] = [
+  {
+    name: 'Multiple failed login attempts',
+    mitre: ['T1110.001'],
+    describe: (h, ip) =>
+      `${randomInt(6, 40)} failed login attempts against the account "${h}" originated from ${ip} within a 10-minute window.`,
+  },
+  {
+    name: 'Brute force attack detected',
+    mitre: ['T1110'],
+    describe: (h, ip) =>
+      `A credential brute-force pattern was detected against "${h}" from ${ip}, cycling through a large password list at high frequency.`,
+  },
+  {
+    name: 'Privilege escalation attempt',
+    mitre: ['T1068'],
+    describe: (h, ip) =>
+      `The account "${h}" (last seen at ${ip}) attempted to exploit a local privilege escalation vector shortly after authenticating.`,
+  },
+  {
+    name: 'Anomalous login location',
+    mitre: ['T1078'],
+    describe: (h, ip) =>
+      `A successful login for "${h}" occurred from ${ip}, a geolocation inconsistent with that account's normal access pattern.`,
+  },
+  {
+    name: 'Impossible travel login',
+    mitre: ['T1078'],
+    describe: (h, ip) =>
+      `"${h}" authenticated from ${ip} less than an hour after a login from a geographically distant location — physically impossible travel time.`,
+  },
+  {
+    name: 'Data exfiltration pattern detected',
+    mitre: ['T1041', 'T1567'],
+    describe: (h, ip) =>
+      `Outbound traffic from "${h}" (${ip}) to an external endpoint matched a known data-exfiltration signature.`,
+  },
+  {
+    name: 'Malware callback detected',
+    mitre: ['T1071'],
+    describe: (h, ip) =>
+      `A host associated with "${h}" (${ip}) issued repeated callbacks to a domain flagged as malware infrastructure.`,
+  },
+  {
+    name: 'Unauthorized configuration change',
+    mitre: ['T1562.001'],
+    describe: (h, ip) =>
+      `A security-relevant configuration change was made under the account "${h}" from ${ip} outside of an approved maintenance window.`,
+  },
 ];
+const SIEM_ALERT_TITLES = SIEM_ALERT_TEMPLATES.map((t) => t.name);
 const CTI_SOURCES = [
   'AlienVault OTX',
   'VirusTotal',
@@ -143,16 +259,57 @@ const PLAYBOOK_TEMPLATES: Array<{
     actions: { resetCredentials: true },
   },
 ];
-const DFIR_TITLES = [
-  'Ransomware outbreak investigation',
-  'Data exfiltration investigation',
-  'Compromised admin account',
-  'Supply chain compromise review',
-  'Business email compromise',
-  'Insider threat investigation',
-  'Web shell discovered on public server',
-  'Domain controller compromise',
+const DFIR_TEMPLATES: EnrichmentTemplate[] = [
+  {
+    name: 'Ransomware outbreak investigation',
+    mitre: ['T1486', 'T1490'],
+    describe: (h, ip) =>
+      `File encryption activity consistent with ransomware was identified starting on ${h} (${ip}), with signs of lateral spread to adjacent hosts before containment began.`,
+  },
+  {
+    name: 'Data exfiltration investigation',
+    mitre: ['T1041', 'T1567'],
+    describe: (h, ip) =>
+      `A sustained, high-volume outbound transfer from ${h} (${ip}) to an external endpoint triggered this investigation into potential data theft.`,
+  },
+  {
+    name: 'Compromised admin account',
+    mitre: ['T1078', 'T1068'],
+    describe: (h, ip) =>
+      `An administrative account was used to authenticate from ${ip} — a location inconsistent with its owner's normal activity — then used to access ${h}.`,
+  },
+  {
+    name: 'Supply chain compromise review',
+    mitre: ['T1195'],
+    describe: (h, ip) =>
+      `A third-party software update installed on ${h} (${ip}) was later found to contain unauthorized code, prompting a review of the affected supply chain.`,
+  },
+  {
+    name: 'Business email compromise',
+    mitre: ['T1566', 'T1078'],
+    describe: (h, ip) =>
+      `A phishing-derived credential was used to access a mailbox from ${ip}, with subsequent activity observed on ${h}.`,
+  },
+  {
+    name: 'Insider threat investigation',
+    mitre: ['T1078'],
+    describe: (h, ip) =>
+      `Unusual data access patterns by an internal account on ${h} (${ip}) fell well outside that user's normal role and working hours.`,
+  },
+  {
+    name: 'Web shell discovered on public server',
+    mitre: ['T1505.003'],
+    describe: (h, ip) =>
+      `A web shell was discovered on the public-facing server ${h} (${ip}), granting remote command execution to an unknown external actor.`,
+  },
+  {
+    name: 'Domain controller compromise',
+    mitre: ['T1003', 'T1021'],
+    describe: (h, ip) =>
+      `Credential-dumping activity was traced back to the domain controller ${h} (${ip}), indicating a compromise at the identity-infrastructure level.`,
+  },
 ];
+const DFIR_TITLES = DFIR_TEMPLATES.map((t) => t.name);
 const SEVERITIES = [
   Severity.LOW,
   Severity.MEDIUM,
@@ -284,6 +441,7 @@ async function seedTenant(
     createdAt: Date;
     cveId: string | null;
     status: VmVulnerabilitiesStatus;
+    assignedToUserId: string | null;
   }> = [];
   for (const assetId of vmAssetIds) {
     const count = randomInt(...PER_TENANT.vmVulnerabilitiesPerAsset);
@@ -299,6 +457,9 @@ async function seedTenant(
           ? `CVE-${randomInt(2022, 2026)}-${randomInt(1000, 99999)}`
           : null,
         status: pick(Object.values(VmVulnerabilitiesStatus)),
+        assignedToUserId: faker.datatype.boolean(0.4)
+          ? pick(analystAndAdminIds)
+          : null,
       });
     }
   }
@@ -327,23 +488,46 @@ async function seedTenant(
   });
   await prisma.edrEndpoint.createMany({ data: edrEndpointRows });
 
+  const edrEndpointById = new Map<string, (typeof edrEndpointRows)[number]>(
+    edrEndpointRows.map((e) => [e.id, e]),
+  );
   const edrDetectionRows: Array<{
     id: string;
     tenantId: string;
     endpointId: string;
     detectionName: string;
+    description: string;
+    mitreTechniques: string[];
     severity: Severity;
+    status: EdrDetectionStatus;
+    assignedToUserId: string | null;
     createdAt: Date;
   }> = [];
   for (const endpointId of edrEndpointIds) {
     const count = randomInt(...PER_TENANT.edrDetectionsPerEndpoint);
+    const endpoint = edrEndpointById.get(endpointId);
     for (let i = 0; i < count; i++) {
+      const template = pick(DETECTION_TEMPLATES);
+      const isAssigned = faker.datatype.boolean(0.5);
       edrDetectionRows.push({
         id: randomUUID(),
         tenantId: tenant.id,
         endpointId,
-        detectionName: pick(DETECTION_NAMES),
+        detectionName: template.name,
+        description: template.describe(
+          endpoint?.hostname ?? 'unknown-host',
+          endpoint?.ip ?? faker.internet.ipv4(),
+        ),
+        mitreTechniques: template.mitre,
         severity: pick(SEVERITIES),
+        status: isAssigned
+          ? pick([
+              EdrDetectionStatus.ASSIGNED,
+              EdrDetectionStatus.ESCALATED,
+              EdrDetectionStatus.RESOLVED,
+            ])
+          : EdrDetectionStatus.OPEN,
+        assignedToUserId: isAssigned ? pick(analystAndAdminIds) : null,
         createdAt: pastDate(30),
       });
     }
@@ -365,15 +549,24 @@ async function seedTenant(
   const siemAlertRows = Array.from({ length: PER_TENANT.siemAlerts }, () => {
     const id = randomUUID();
     siemAlertIds.push(id);
+    const template = pick(SIEM_ALERT_TEMPLATES);
+    const isAssigned = faker.datatype.boolean(0.5);
+    const account = faker.internet.username().toLowerCase();
     return {
       id,
       tenantId: tenant.id,
-      title: pick(SIEM_ALERT_TITLES),
+      title: template.name,
+      description: template.describe(account, faker.internet.ipv4()),
+      mitreTechniques: template.mitre,
       severity: pick(SEVERITIES),
-      status: pick(Object.values(SiemAlertStatus)),
-      assignedToUserId: faker.datatype.boolean(0.5)
-        ? pick(analystAndAdminIds)
-        : null,
+      status: isAssigned
+        ? pick([
+            SiemAlertStatus.ASSIGNED,
+            SiemAlertStatus.ESCALATED,
+            SiemAlertStatus.RESOLVED,
+          ])
+        : SiemAlertStatus.OPEN,
+      assignedToUserId: isAssigned ? pick(analystAndAdminIds) : null,
       createdAt: pastDate(30),
     };
   });
@@ -465,12 +658,25 @@ async function seedTenant(
   const dfirIncidentRows = Array.from({ length: PER_TENANT.dfirIncidents }, () => {
     const id = randomUUID();
     dfirIncidentIds.push(id);
+    const template = pick(DFIR_TEMPLATES);
+    const endpoint = pick(edrEndpointRows);
+    const isAssigned = faker.datatype.boolean(0.5);
     return {
       id,
       tenantId: tenant.id,
-      title: pick(DFIR_TITLES),
+      title: template.name,
+      description: template.describe(endpoint.hostname, endpoint.ip),
+      mitreTechniques: template.mitre,
       severity: pick(SEVERITIES),
-      status: pick(Object.values(DfirIncidentStatus)),
+      status: isAssigned
+        ? pick([
+            DfirIncidentStatus.INVESTIGATING,
+            DfirIncidentStatus.ESCALATED,
+            DfirIncidentStatus.CONTAINED,
+            DfirIncidentStatus.RESOLVED,
+          ])
+        : DfirIncidentStatus.OPEN,
+      assignedToUserId: isAssigned ? pick(analystAndAdminIds) : null,
       createdAt: pastDate(60),
     };
   });
@@ -519,9 +725,6 @@ async function seedTenant(
     summary: string;
     sourceId: string;
   }> = [];
-  const endpointById = new Map<string, (typeof edrEndpointRows)[number]>(
-    edrEndpointRows.map((e) => [e.id, e]),
-  );
   for (const d of edrDetectionRows) {
     feedRows.push({
       id: randomUUID(),
@@ -530,7 +733,7 @@ async function seedTenant(
       type: 'detection',
       severity: d.severity,
       timestamp: d.createdAt,
-      summary: `${d.detectionName} on ${endpointById.get(d.endpointId)?.hostname ?? 'unknown-host'}`,
+      summary: `${d.detectionName} on ${edrEndpointById.get(d.endpointId)?.hostname ?? 'unknown-host'}`,
       sourceId: d.id,
     });
   }

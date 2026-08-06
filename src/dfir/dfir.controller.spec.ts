@@ -12,10 +12,12 @@ import type { AuthenticatedUser } from '../auth/jwt.strategy';
 import { UpdateDfirIncidentStatusDto } from './dto/updateDfirIncidentStatus.dto';
 import { CreateDfirLinkDto } from './dto/createDfirLink.dto';
 import { DfirQueryDto } from './dto/dfirQuery.dto';
+import { AssignDto } from '../common/dto/assign.dto';
 
 const mockDfirService = {
   query: jest.fn(),
   getIncidentDetail: jest.fn(),
+  assignIncident: jest.fn(),
   updateStatus: jest.fn(),
   linkRecord: jest.fn(),
 };
@@ -99,6 +101,36 @@ describe('DfirController', () => {
     });
   });
 
+  describe('assignIncident', () => {
+    it('passes the caller and requested assignee to the service', async () => {
+      const updated = {
+        id: 'incident-1',
+        status: DfirIncidentStatus.INVESTIGATING,
+      };
+      mockDfirService.assignIncident.mockResolvedValue(updated);
+
+      const result = await controller.assignIncident(analyst, 'incident-1', {
+        assignedToUserId: 'analyst-2',
+      });
+
+      expect(result).toEqual(updated);
+      expect(mockDfirService.assignIncident).toHaveBeenCalledWith(
+        'tenant-1',
+        'incident-1',
+        analyst,
+        'analyst-2',
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      const dto: AssignDto = {};
+      await expect(
+        controller.assignIncident(noTenantAdmin, 'incident-1', dto),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockDfirService.assignIncident).not.toHaveBeenCalled();
+    });
+  });
+
   describe('updateStatus', () => {
     const dto: UpdateDfirIncidentStatusDto = {
       status: DfirIncidentStatus.RESOLVED,
@@ -114,6 +146,7 @@ describe('DfirController', () => {
       expect(mockDfirService.updateStatus).toHaveBeenCalledWith(
         'tenant-1',
         'incident-1',
+        analyst,
         DfirIncidentStatus.RESOLVED,
       );
     });

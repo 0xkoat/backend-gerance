@@ -13,12 +13,14 @@ import { CreateVmAssetDto } from './dto/createVmAsset.dto';
 import { UpdateVulnerabilityStatusDto } from './dto/updateVulnerabilityStatus.dto';
 import { IngestVmEventDto } from './dto/ingestVmEvent.dto';
 import { VmQueryDto } from './dto/vmQuery.dto';
+import { AssignDto } from '../common/dto/assign.dto';
 
 const mockVmService = {
   listAssets: jest.fn(),
   createAsset: jest.fn(),
   query: jest.fn(),
   updateVulnerabilityStatus: jest.fn(),
+  assignVulnerability: jest.fn(),
   ingest: jest.fn(),
 };
 
@@ -117,7 +119,7 @@ describe('VmController', () => {
 
     it('throws ForbiddenException when the caller has no tenant', async () => {
       await expect(
-        controller.queryVulnerabilities(noTenantAdmin, {} as VmQueryDto),
+        controller.queryVulnerabilities(noTenantAdmin, {}),
       ).rejects.toThrow(ForbiddenException);
       expect(mockVmService.query).not.toHaveBeenCalled();
     });
@@ -154,6 +156,33 @@ describe('VmController', () => {
         controller.updateVulnerabilityStatus(noTenantAdmin, 'vuln-1', dto),
       ).rejects.toThrow(ForbiddenException);
       expect(mockVmService.updateVulnerabilityStatus).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('assignVulnerability', () => {
+    it('passes the caller and requested assignee to the service', async () => {
+      const updated = { id: 'vuln-1', assignedToUserId: 'analyst-2' };
+      mockVmService.assignVulnerability.mockResolvedValue(updated);
+
+      const result = await controller.assignVulnerability(analyst, 'vuln-1', {
+        assignedToUserId: 'analyst-2',
+      });
+
+      expect(result).toEqual(updated);
+      expect(mockVmService.assignVulnerability).toHaveBeenCalledWith(
+        'tenant-1',
+        'vuln-1',
+        analyst,
+        'analyst-2',
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      const dto: AssignDto = {};
+      await expect(
+        controller.assignVulnerability(noTenantAdmin, 'vuln-1', dto),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockVmService.assignVulnerability).not.toHaveBeenCalled();
     });
   });
 

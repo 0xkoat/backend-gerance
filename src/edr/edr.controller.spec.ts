@@ -2,14 +2,23 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ForbiddenException } from '@nestjs/common';
 import { EdrController } from './edr.controller';
 import { EdrService } from './edr.service';
-import { ModuleName, Severity, UserRole } from '../generated/prisma/enums';
+import {
+  ModuleName,
+  Severity,
+  UserRole,
+  EdrDetectionStatus,
+} from '../generated/prisma/enums';
 import type { AuthenticatedUser } from '../auth/jwt.strategy';
 import { IngestEdrEventDto } from './dto/ingestEdrEvent.dto';
 import { EdrQueryDto } from './dto/edrQuery.dto';
+import { UpdateEdrDetectionStatusDto } from './dto/updateEdrDetectionStatus.dto';
+import { AssignDto } from '../common/dto/assign.dto';
 
 const mockEdrService = {
   listEndpoints: jest.fn(),
   query: jest.fn(),
+  assignDetection: jest.fn(),
+  updateDetectionStatus: jest.fn(),
   ingest: jest.fn(),
 };
 
@@ -93,6 +102,71 @@ describe('EdrController', () => {
         controller.queryDetections(noTenantAdmin, {}),
       ).rejects.toThrow(ForbiddenException);
       expect(mockEdrService.query).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('assignDetection', () => {
+    it('passes the caller and requested assignee to the service', async () => {
+      const updated = {
+        id: 'detection-1',
+        status: EdrDetectionStatus.ASSIGNED,
+      };
+      mockEdrService.assignDetection.mockResolvedValue(updated);
+
+      const result = await controller.assignDetection(analyst, 'detection-1', {
+        assignedToUserId: 'analyst-2',
+      });
+
+      expect(result).toEqual(updated);
+      expect(mockEdrService.assignDetection).toHaveBeenCalledWith(
+        'tenant-1',
+        'detection-1',
+        analyst,
+        'analyst-2',
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      const dto: AssignDto = {};
+      await expect(
+        controller.assignDetection(noTenantAdmin, 'detection-1', dto),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockEdrService.assignDetection).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateDetectionStatus', () => {
+    const dto: UpdateEdrDetectionStatusDto = {
+      status: EdrDetectionStatus.RESOLVED,
+    };
+
+    it('passes the caller and status to the service', async () => {
+      const updated = {
+        id: 'detection-1',
+        status: EdrDetectionStatus.RESOLVED,
+      };
+      mockEdrService.updateDetectionStatus.mockResolvedValue(updated);
+
+      const result = await controller.updateDetectionStatus(
+        analyst,
+        'detection-1',
+        dto,
+      );
+
+      expect(result).toEqual(updated);
+      expect(mockEdrService.updateDetectionStatus).toHaveBeenCalledWith(
+        'tenant-1',
+        'detection-1',
+        analyst,
+        EdrDetectionStatus.RESOLVED,
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      await expect(
+        controller.updateDetectionStatus(noTenantAdmin, 'detection-1', dto),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockEdrService.updateDetectionStatus).not.toHaveBeenCalled();
     });
   });
 

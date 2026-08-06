@@ -84,6 +84,7 @@ describe('SiemController (e2e)', () => {
   const mockSiemService = {
     listLogs: jest.fn(),
     query: jest.fn(),
+    assignAlert: jest.fn(),
     updateAlertStatus: jest.fn(),
     ingest: jest.fn(),
   };
@@ -119,7 +120,9 @@ describe('SiemController (e2e)', () => {
       .useValue({
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
-        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
+        refreshToken: {
+          create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+        },
       })
       .compile();
 
@@ -179,24 +182,24 @@ describe('SiemController (e2e)', () => {
     });
   });
 
-  describe('PATCH /siem/alerts/:id', () => {
-    it('allows an Analyst to update alert status', async () => {
+  describe('POST /siem/alerts/:id/assign', () => {
+    it('allows an Analyst to self-assign', async () => {
       const token = await loginAs(analystUser.email);
-      mockSiemService.updateAlertStatus.mockResolvedValue({
+      mockSiemService.assignAlert.mockResolvedValue({
         id: 'alert-1',
-        status: SiemAlertStatus.RESOLVED,
+        status: SiemAlertStatus.ASSIGNED,
       });
 
       await request(app.getHttpServer())
-        .patch('/api/siem/alerts/alert-1')
+        .post('/api/siem/alerts/alert-1/assign')
         .set('Authorization', `Bearer ${token}`)
-        .send({ status: SiemAlertStatus.RESOLVED })
-        .expect(200);
+        .send({})
+        .expect(201);
 
-      expect(mockSiemService.updateAlertStatus).toHaveBeenCalledWith(
+      expect(mockSiemService.assignAlert).toHaveBeenCalledWith(
         'tenant-1',
         'alert-1',
-        SiemAlertStatus.RESOLVED,
+        expect.objectContaining({ role: UserRole.ANALYST }),
         undefined,
       );
     });
@@ -205,10 +208,55 @@ describe('SiemController (e2e)', () => {
       const token = await loginAs(viewerUser.email);
 
       await request(app.getHttpServer())
-        .patch('/api/siem/alerts/alert-1')
+        .post('/api/siem/alerts/alert-1/assign')
+        .set('Authorization', `Bearer ${token}`)
+        .send({})
+        .expect(403);
+      expect(mockSiemService.assignAlert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('PATCH /siem/alerts/:id/status', () => {
+    it('allows an Analyst to update alert status', async () => {
+      const token = await loginAs(analystUser.email);
+      mockSiemService.updateAlertStatus.mockResolvedValue({
+        id: 'alert-1',
+        status: SiemAlertStatus.RESOLVED,
+      });
+
+      await request(app.getHttpServer())
+        .patch('/api/siem/alerts/alert-1/status')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ status: SiemAlertStatus.RESOLVED })
+        .expect(200);
+
+      expect(mockSiemService.updateAlertStatus).toHaveBeenCalledWith(
+        'tenant-1',
+        'alert-1',
+        expect.objectContaining({ role: UserRole.ANALYST }),
+        SiemAlertStatus.RESOLVED,
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .patch('/api/siem/alerts/alert-1/status')
         .set('Authorization', `Bearer ${token}`)
         .send({ status: SiemAlertStatus.RESOLVED })
         .expect(403);
+      expect(mockSiemService.updateAlertStatus).not.toHaveBeenCalled();
+    });
+
+    it('rejects a status value other than ESCALATED/RESOLVED', async () => {
+      const token = await loginAs(analystUser.email);
+
+      await request(app.getHttpServer())
+        .patch('/api/siem/alerts/alert-1/status')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ status: SiemAlertStatus.ASSIGNED })
+        .expect(400);
       expect(mockSiemService.updateAlertStatus).not.toHaveBeenCalled();
     });
   });
@@ -357,7 +405,9 @@ describe('EDR -> SIEM integration (e2e, real event chain)', () => {
         ...statefulPrisma,
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
-        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
+        refreshToken: {
+          create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+        },
       })
       .compile();
 

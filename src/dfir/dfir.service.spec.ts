@@ -1,5 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { DfirService, DfirQueryFilters } from './dfir.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -8,11 +13,13 @@ import {
   DfirLinkSourceType,
   ModuleName,
   Severity,
+  UserRole,
 } from '../generated/prisma/enums';
 import {
   SoarExecutionPayload,
   UnifiedEvent,
 } from '../common/security-module/types';
+import type { AuthenticatedUser } from '../auth/jwt.strategy';
 
 const mockPrismaService = {
   dfirIncident: {
@@ -28,11 +35,24 @@ const mockPrismaService = {
   siemAlert: {
     findUnique: jest.fn(),
   },
+  user: {
+    findFirst: jest.fn(),
+  },
 };
 
 const mockEventEmitter = {
   emit: jest.fn(),
 };
+
+function authUser(overrides: Partial<AuthenticatedUser>): AuthenticatedUser {
+  return {
+    userId: 'caller-1',
+    role: UserRole.ANALYST,
+    tenantId: 'tenant-1',
+    mustChangePassword: false,
+    ...overrides,
+  };
+}
 
 describe('DfirService', () => {
   let service: DfirService;
@@ -411,23 +431,92 @@ describe('DfirService', () => {
     });
   });
 
-  describe('updateStatus', () => {
+  describe('assignIncident', () => {
     const existing = {
       id: 'incident-1',
       tenantId: 'tenant-1',
       status: DfirIncidentStatus.OPEN,
+      assignedToUserId: null,
     };
 
-    it('updates the status when the incident belongs to the tenant', async () => {
+    it('lets an Analyst self-assign, moving status to INVESTIGATING', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-1' });
       mockPrismaService.dfirIncident.findUnique.mockResolvedValue(existing);
       mockPrismaService.dfirIncident.update.mockResolvedValue({
         ...existing,
+        status: DfirIncidentStatus.INVESTIGATING,
+        assignedToUserId: 'analyst-1',
+      });
+
+      const result = await service.assignIncident(
+        'tenant-1',
+        'incident-1',
+        caller,
+        undefined,
+      );
+
+      expect(result.status).toBe(DfirIncidentStatus.INVESTIGATING);
+      expect(mockPrismaService.dfirIncident.update).toHaveBeenCalledWith({
+        where: { id: 'incident-1' },
+        data: {
+          assignedToUserId: 'analyst-1',
+          status: DfirIncidentStatus.INVESTIGATING,
+        },
+      });
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+        'dfir.incident.assigned',
+        expect.objectContaining({
+          tenantId: 'tenant-1',
+          source: ModuleName.DFIR,
+          recordId: 'incident-1',
+          assignedToUserId: 'analyst-1',
+          status: DfirIncidentStatus.INVESTIGATING,
+        }),
+      );
+    });
+
+    it('rejects an Analyst trying to assign someone else', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-1' });
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue(existing);
+
+      await expect(
+        service.assignIncident('tenant-1', 'incident-1', caller, 'analyst-2'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrismaService.dfirIncident.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the incident does not exist', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.assignIncident('tenant-1', 'missing-id', caller, 'analyst-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('updateStatus', () => {
+    const investigating = {
+      id: 'incident-1',
+      tenantId: 'tenant-1',
+      status: DfirIncidentStatus.INVESTIGATING,
+      assignedToUserId: 'analyst-1',
+    };
+
+    it('lets the assigned Analyst resolve the incident', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-1' });
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue(
+        investigating,
+      );
+      mockPrismaService.dfirIncident.update.mockResolvedValue({
+        ...investigating,
         status: DfirIncidentStatus.RESOLVED,
       });
 
       const result = await service.updateStatus(
         'tenant-1',
         'incident-1',
+        caller,
         DfirIncidentStatus.RESOLVED,
       );
 
@@ -436,15 +525,85 @@ describe('DfirService', () => {
         where: { id: 'incident-1' },
         data: { status: DfirIncidentStatus.RESOLVED },
       });
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+        'dfir.incident.status_changed',
+        expect.objectContaining({
+          tenantId: 'tenant-1',
+          source: ModuleName.DFIR,
+          recordId: 'incident-1',
+          status: DfirIncidentStatus.RESOLVED,
+        }),
+      );
+    });
+
+    it('lets an Admin move an assigned incident to CONTAINED', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue(
+        investigating,
+      );
+      mockPrismaService.dfirIncident.update.mockResolvedValue({
+        ...investigating,
+        status: DfirIncidentStatus.CONTAINED,
+      });
+
+      await service.updateStatus(
+        'tenant-1',
+        'incident-1',
+        caller,
+        DfirIncidentStatus.CONTAINED,
+      );
+
+      expect(mockPrismaService.dfirIncident.update).toHaveBeenCalledWith({
+        where: { id: 'incident-1' },
+        data: { status: DfirIncidentStatus.CONTAINED },
+      });
+    });
+
+    it('rejects an Analyst who is not the assignee', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-2' });
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue(
+        investigating,
+      );
+
+      await expect(
+        service.updateStatus(
+          'tenant-1',
+          'incident-1',
+          caller,
+          DfirIncidentStatus.RESOLVED,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrismaService.dfirIncident.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects transitioning an incident that has never been assigned', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
+        ...investigating,
+        status: DfirIncidentStatus.OPEN,
+        assignedToUserId: null,
+      });
+
+      await expect(
+        service.updateStatus(
+          'tenant-1',
+          'incident-1',
+          caller,
+          DfirIncidentStatus.RESOLVED,
+        ),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.dfirIncident.update).not.toHaveBeenCalled();
     });
 
     it('throws NotFoundException when the incident does not exist', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
       mockPrismaService.dfirIncident.findUnique.mockResolvedValue(null);
 
       await expect(
         service.updateStatus(
           'tenant-1',
           'missing-id',
+          caller,
           DfirIncidentStatus.RESOLVED,
         ),
       ).rejects.toThrow(NotFoundException);
@@ -452,8 +611,9 @@ describe('DfirService', () => {
     });
 
     it('throws NotFoundException when the incident belongs to a different tenant', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
       mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
-        ...existing,
+        ...investigating,
         tenantId: 'tenant-2',
       });
 
@@ -461,6 +621,7 @@ describe('DfirService', () => {
         service.updateStatus(
           'tenant-1',
           'incident-1',
+          caller,
           DfirIncidentStatus.RESOLVED,
         ),
       ).rejects.toThrow(NotFoundException);

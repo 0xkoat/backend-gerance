@@ -89,6 +89,7 @@ describe('DfirController (e2e)', () => {
   const mockDfirService = {
     query: jest.fn(),
     getIncidentDetail: jest.fn(),
+    assignIncident: jest.fn(),
     updateStatus: jest.fn(),
     linkRecord: jest.fn(),
   };
@@ -124,7 +125,9 @@ describe('DfirController (e2e)', () => {
       .useValue({
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
-        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
+        refreshToken: {
+          create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+        },
       })
       .compile();
 
@@ -196,7 +199,41 @@ describe('DfirController (e2e)', () => {
     });
   });
 
-  describe('PATCH /dfir/incidents/:id', () => {
+  describe('POST /dfir/incidents/:id/assign', () => {
+    it('allows an Analyst to self-assign', async () => {
+      const token = await loginAs(analystUser.email);
+      mockDfirService.assignIncident.mockResolvedValue({
+        id: 'incident-1',
+        status: DfirIncidentStatus.INVESTIGATING,
+      });
+
+      await request(app.getHttpServer())
+        .post('/api/dfir/incidents/incident-1/assign')
+        .set('Authorization', `Bearer ${token}`)
+        .send({})
+        .expect(201);
+
+      expect(mockDfirService.assignIncident).toHaveBeenCalledWith(
+        'tenant-1',
+        'incident-1',
+        expect.objectContaining({ role: UserRole.ANALYST }),
+        undefined,
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .post('/api/dfir/incidents/incident-1/assign')
+        .set('Authorization', `Bearer ${token}`)
+        .send({})
+        .expect(403);
+      expect(mockDfirService.assignIncident).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('PATCH /dfir/incidents/:id/status', () => {
     it('allows an Analyst to update incident status', async () => {
       const token = await loginAs(analystUser.email);
       mockDfirService.updateStatus.mockResolvedValue({
@@ -205,7 +242,7 @@ describe('DfirController (e2e)', () => {
       });
 
       await request(app.getHttpServer())
-        .patch('/api/dfir/incidents/incident-1')
+        .patch('/api/dfir/incidents/incident-1/status')
         .set('Authorization', `Bearer ${token}`)
         .send({ status: DfirIncidentStatus.RESOLVED })
         .expect(200);
@@ -213,6 +250,7 @@ describe('DfirController (e2e)', () => {
       expect(mockDfirService.updateStatus).toHaveBeenCalledWith(
         'tenant-1',
         'incident-1',
+        expect.objectContaining({ role: UserRole.ANALYST }),
         DfirIncidentStatus.RESOLVED,
       );
     });
@@ -221,10 +259,21 @@ describe('DfirController (e2e)', () => {
       const token = await loginAs(viewerUser.email);
 
       await request(app.getHttpServer())
-        .patch('/api/dfir/incidents/incident-1')
+        .patch('/api/dfir/incidents/incident-1/status')
         .set('Authorization', `Bearer ${token}`)
         .send({ status: DfirIncidentStatus.RESOLVED })
         .expect(403);
+      expect(mockDfirService.updateStatus).not.toHaveBeenCalled();
+    });
+
+    it('rejects a status value other than ESCALATED/CONTAINED/RESOLVED', async () => {
+      const token = await loginAs(analystUser.email);
+
+      await request(app.getHttpServer())
+        .patch('/api/dfir/incidents/incident-1/status')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ status: DfirIncidentStatus.INVESTIGATING })
+        .expect(400);
       expect(mockDfirService.updateStatus).not.toHaveBeenCalled();
     });
   });
@@ -371,29 +420,27 @@ describe('EDR -> SIEM -> CTI -> SOAR -> DFIR integration (e2e, full chain)', () 
               ) ?? null,
             ),
         ),
-      findUnique: jest
-        .fn()
-        .mockImplementation(
-          ({
-            where,
-          }: {
-            where: {
-              tenantId_type_value: {
-                tenantId: string;
-                type: string;
-                value: string;
-              };
+      findUnique: jest.fn().mockImplementation(
+        ({
+          where,
+        }: {
+          where: {
+            tenantId_type_value: {
+              tenantId: string;
+              type: string;
+              value: string;
             };
-          }) =>
-            Promise.resolve(
-              ctiIocs.find(
-                (i) =>
-                  i.tenantId === where.tenantId_type_value.tenantId &&
-                  i.type === where.tenantId_type_value.type &&
-                  i.value === where.tenantId_type_value.value,
-              ) ?? null,
-            ),
-        ),
+          };
+        }) =>
+          Promise.resolve(
+            ctiIocs.find(
+              (i) =>
+                i.tenantId === where.tenantId_type_value.tenantId &&
+                i.type === where.tenantId_type_value.type &&
+                i.value === where.tenantId_type_value.value,
+            ) ?? null,
+          ),
+      ),
     },
     soarPlaybook: {
       create: jest
@@ -531,7 +578,9 @@ describe('EDR -> SIEM -> CTI -> SOAR -> DFIR integration (e2e, full chain)', () 
         ...statefulPrisma,
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
-        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
+        refreshToken: {
+          create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+        },
       })
       .compile();
 

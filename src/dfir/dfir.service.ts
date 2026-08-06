@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import { DfirIncident, DfirLink, Prisma } from '../generated/prisma/client';
 import {
@@ -17,6 +22,11 @@ import type {
   SoarExecutionPayload,
   UnifiedEvent,
 } from '../common/security-module/types';
+import {
+  resolveAssignee,
+  assertCanTransitionStatus,
+} from '../common/assignment';
+import type { AuthenticatedUser } from '../auth/jwt.strategy';
 
 export interface DfirQueryFilters extends BaseQueryFilters {
   status?: DfirIncidentStatus;
@@ -26,6 +36,11 @@ export interface DfirLinkInput {
   sourceType: DfirLinkSourceType;
   sourceId: string;
 }
+
+const TRANSITIONABLE_STATUSES: DfirIncidentStatus[] = [
+  DfirIncidentStatus.INVESTIGATING,
+  DfirIncidentStatus.ESCALATED,
+];
 
 @Injectable()
 export class DfirService implements SecurityModule<
@@ -185,9 +200,50 @@ export class DfirService implements SecurityModule<
     return incident;
   }
 
+  async assignIncident(
+    tenantId: string,
+    id: string,
+    caller: AuthenticatedUser,
+    requestedAssigneeId: string | undefined,
+  ): Promise<DfirIncident> {
+    const incident = await this.prisma.dfirIncident.findUnique({
+      where: { id },
+    });
+    if (!incident || incident.tenantId !== tenantId) {
+      throw new NotFoundException('Incident not found');
+    }
+
+    const assigneeId = await resolveAssignee(
+      this.prisma,
+      caller,
+      tenantId,
+      requestedAssigneeId,
+    );
+
+    const updated = await this.prisma.dfirIncident.update({
+      where: { id },
+      data: {
+        assignedToUserId: assigneeId,
+        status: DfirIncidentStatus.INVESTIGATING,
+      },
+    });
+
+    this.eventEmitter.emit('dfir.incident.assigned', {
+      tenantId,
+      source: ModuleName.DFIR,
+      recordId: updated.id,
+      assignedToUserId: assigneeId,
+      status: updated.status,
+      timestamp: new Date(),
+    });
+
+    return updated;
+  }
+
   async updateStatus(
     tenantId: string,
     id: string,
+    caller: AuthenticatedUser,
     status: DfirIncidentStatus,
   ): Promise<DfirIncident> {
     const incident = await this.prisma.dfirIncident.findUnique({
@@ -197,9 +253,27 @@ export class DfirService implements SecurityModule<
       throw new NotFoundException('Incident not found');
     }
 
-    return this.prisma.dfirIncident.update({
+    assertCanTransitionStatus(caller, incident.assignedToUserId);
+
+    if (!TRANSITIONABLE_STATUSES.includes(incident.status)) {
+      throw new ConflictException(
+        'Incident must be assigned before it can be escalated, contained, or resolved',
+      );
+    }
+
+    const updated = await this.prisma.dfirIncident.update({
       where: { id },
       data: { status },
     });
+
+    this.eventEmitter.emit('dfir.incident.status_changed', {
+      tenantId,
+      source: ModuleName.DFIR,
+      recordId: updated.id,
+      status: updated.status,
+      timestamp: new Date(),
+    });
+
+    return updated;
   }
 }
