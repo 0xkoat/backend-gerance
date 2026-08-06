@@ -28,6 +28,10 @@ export class UsersService {
     });
   }
 
+  // The tenant-isolation choke point every other tenant-scoped lookup below
+  // routes through: a user existing is not enough, it must belong to the
+  // caller's own tenant, a cross-tenant ID gets the same 404 as a
+  // nonexistent one, so it can't be used to probe for other tenants' users.
   async findByIdForTenant(id: string, tenantId: string) {
     const user = await this.prisma.user.findUnique({
       where: { id },
@@ -54,6 +58,12 @@ export class UsersService {
     return { users, total, page, pageSize };
   }
 
+  // role and tenantId are always caller-supplied by the controller (from the
+  // creator's own token / the endpoint being called), never taken from the
+  // request body, per the provisioning hierarchy rules. mustChangePassword
+  // is explicitly forced true here rather than relying on the schema default,
+  // per a fixed bug where the column default alone meant no new account was
+  // ever actually pushed through the forced-change flow.
   async createUser(
     createUserDto: CreateUserDto,
     role: UserRole,
@@ -156,6 +166,9 @@ export class UsersService {
     return results[6];
   }
 
+  // Every tenant must always have at least one Admin. Demoting the last one
+  // is rejected outright rather than silently leaving the tenant with no one
+  // able to administer it.
   async changeRoleForTenant(id: string, tenantId: string, role: UserRole) {
     const user = await this.findByIdForTenant(id, tenantId);
 

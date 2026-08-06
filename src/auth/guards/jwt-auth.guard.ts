@@ -8,6 +8,11 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 
+// First of three global guards (registered via APP_GUARD in app.module.ts,
+// applied in registration order: this, then RolesGuard, then
+// MustChangePasswordGuard). Every route is JWT-gated by default; @Public()
+// is the only opt-out, checked before Passport's own JWT validation runs so
+// a public route never even attempts to parse a bearer token.
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') implements CanActivate {
   constructor(private reflector: Reflector) {

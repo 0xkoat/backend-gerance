@@ -23,6 +23,9 @@ import { requireTenantId } from '../common/require-tenant-id';
 export class CtiController {
   constructor(private readonly ctiService: CtiService) {}
 
+  // Shared by both createIoc (manual entry) and ingestEvent, both funnel
+  // through the same ctiService.ingest(), so a hand-added IOC and a
+  // vendor-fed one are indistinguishable once stored.
   private buildIocEvent(tenantId: string, dto: CreateCtiIocDto): UnifiedEvent {
     return {
       tenantId,

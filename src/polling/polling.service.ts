@@ -42,6 +42,11 @@ export class PollingService {
     };
   }
 
+  // Only tenants that have actually activated a module (TenantModule.isActive)
+  // get polled. A tenant with no activation row for a module is silently
+  // skipped, not an error (see TenantsService.listModules for the CRUD path
+  // that populates these rows; nothing auto-provisions them at tenant
+  // creation, so a real tenant with zero activations polls nothing).
   @Cron(CronExpression.EVERY_5_MINUTES)
   async pollAll(): Promise<void> {
     const activeTenantModules = await this.prisma.tenantModule.findMany({
@@ -53,6 +58,11 @@ export class PollingService {
     }
   }
 
+  // Routes to the right module service via the constructor-built registry
+  // (the payoff of every module sharing the generic SecurityModule contract,
+  // no per-module switch needed here). Reuses TenantModule.config (a Json?
+  // column, no dedicated schema field) to persist lastSyncedAt between runs,
+  // so each poll only fetches records newer than the previous one.
   async pollOne(tenantModule: TenantModule): Promise<void> {
     const config =
       (tenantModule.config as Record<string, unknown> | null) ?? {};

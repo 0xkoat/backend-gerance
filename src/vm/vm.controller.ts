@@ -22,6 +22,10 @@ import { UnifiedEvent } from '../common/security-module/types';
 import { requireTenantId } from '../common/require-tenant-id';
 import { AssignDto } from '../common/dto/assign.dto';
 
+// GET routes are open to any authenticated tenant role (Admin/Analyst/
+// Viewer); mutating routes are Analyst/Admin. POST /vm/events is
+// Admin-gated as a stand-in for real machine-caller auth (API key/mTLS)
+// that doesn't exist yet.
 @Controller('vm')
 export class VmController {
   constructor(private readonly vmService: VmService) {}

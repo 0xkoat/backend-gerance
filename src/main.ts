@@ -8,6 +8,10 @@ import { AllExceptionsFilter } from './common/filters/all-exceptions.filter';
 
 declare const module: any;
 
+// Composition root: wires global middleware/guards/pipes onto the Nest app
+// before it starts listening. Order matters here: helmet/cookieParser/CORS
+// must be applied before routes are hit, and the global prefix must be set
+// before Nest resolves any controller path.
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
 

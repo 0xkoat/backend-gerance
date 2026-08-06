@@ -22,6 +22,13 @@ type StreamableEvent =
 export class EventsService {
   constructor(private readonly eventEmitter: EventEmitter2) {}
 
+  // One SSE stream per open connection, filtered to the caller's own tenant.
+  // This is the only tenant-isolation boundary here, since EventEmitter2
+  // itself is process-global and not tenant-aware. Explicit event-name list
+  // (not EventEmitterModule's wildcard mode) so every subscribed name is
+  // reviewable in one place; fromEvent's Node-style overload untyped +
+  // cast right after the merge, since RxJS 7's typed overload for
+  // EventEmitter2-shaped emitters is deprecated.
   streamForTenant(tenantId: string): Observable<MessageEvent> {
     return merge(
       fromEvent(this.eventEmitter, 'edr.detection.created'),

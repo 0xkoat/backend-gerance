@@ -8,6 +8,11 @@ import { Reflector } from '@nestjs/core';
 import { SKIP_PASSWORD_CHECK_KEY } from '../decorators/skip-password-check.decorator';
 import type { AuthenticatedUser } from '../jwt.strategy';
 
+// Third of the three global guards. Blocks every route for a user whose
+// mustChangePassword flag is still set, except ones explicitly opted out
+// via @SkipPasswordCheck() (e.g. logout, and the self-change route itself).
+// Forces a fresh account through the mandatory first-login password change
+// before it can touch anything else in the API.
 @Injectable()
 export class MustChangePasswordGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}

@@ -37,6 +37,11 @@ export class VmService implements SecurityModule<
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
+  // SecurityModule.ingest() implementation, the entry point both the manual
+  // POST /vm/events route and the scheduled poller funnel through. Upserts
+  // the parent VmAsset by (tenantId, ip) rather than requiring it to already
+  // exist, so a vendor feed can report a vulnerability on a host VM has
+  // never seen before without a separate asset-creation step.
   async ingest(event: UnifiedEvent): Promise<void> {
     const data = event.data as {
       assetIP: string;
@@ -228,8 +233,9 @@ export class VmService implements SecurityModule<
       data: { assignedToUserId: assigneeId },
     });
 
-    // Assignment doesn't move VmVulnerability's own remediation status (see
-    // the module-scope decision in CLAUDE.md) — the emitted status is just
+    // Assignment doesn't move VmVulnerability's own remediation status.
+    // "Who's working this" and "what's the remediation outcome" are
+    // deliberately separate questions here, the emitted status is just
     // whatever the record's current remediation status already was.
     this.eventEmitter.emit('vm.vulnerability.assigned', {
       tenantId,

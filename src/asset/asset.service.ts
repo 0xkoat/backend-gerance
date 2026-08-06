@@ -13,6 +13,12 @@ import type {
 } from '../common/security-module/types';
 import type { AssetFeedEntry } from '../generated/prisma/client';
 
+// Maintains AssetFeedEntry as a materialized, denormalized view over all six
+// modules' `*.created` events, chosen over a live fan-out query across six
+// tables so getUnifiedFeed can be one indexed ORDER BY/LIMIT/OFFSET query
+// instead of merging six result sets in memory. Trade-off: the feed is
+// eventually consistent with its source tables, never a source of truth
+// itself.
 @Injectable()
 export class AssetService {
   constructor(private readonly prisma: PrismaService) {}
@@ -257,6 +263,9 @@ export class AssetService {
     });
   }
 
+  // The one real query this whole materialized table exists to serve:
+  // real DB-level pagination over all six modules' records at once, backed
+  // by the (tenantId, timestamp) index on AssetFeedEntry.
   async getUnifiedFeed(
     tenantId: string,
     filters: BaseQueryFilters,

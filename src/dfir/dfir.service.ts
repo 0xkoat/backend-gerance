@@ -64,6 +64,10 @@ export class DfirService implements SecurityModule<
     );
   }
 
+  // The single choke point both ingest() and handleSoarExecution() funnel
+  // through. Creates the incident, emits 'dfir.incident.created' once here
+  // regardless of caller, then links any records passed in (e.g. the
+  // originating SIEM alert and the SOAR execution that triggered it).
   async createIncidentFromEvent(
     tenantId: string,
     title: string,
@@ -113,7 +117,7 @@ export class DfirService implements SecurityModule<
   }
 
   // Nothing references DfirLink (it's the leaf of the polymorphic link, not
-  // a parent), so this is a plain, unguarded delete — no RESTRICT-FK
+  // a parent), so this is a plain, unguarded delete, no RESTRICT-FK
   // concern the way SoarPlaybook/EdrEndpoint/VmAsset deletion had.
   async unlinkRecord(
     tenantId: string,
@@ -137,6 +141,10 @@ export class DfirService implements SecurityModule<
     await this.prisma.dfirLink.delete({ where: { id: linkId } });
   }
 
+  // Final hop of the EDR -> SIEM -> CTI -> SOAR -> DFIR chain: every SOAR
+  // execution spawns a DFIR incident linked back to both the alert that
+  // triggered it and the execution itself, so an analyst investigating the
+  // incident can trace it back to its origin via getIncidentDetail's links.
   @OnEvent('soar.execution.created')
   async handleSoarExecution(payload: SoarExecutionPayload): Promise<void> {
     const alert = await this.prisma.siemAlert.findUnique({
@@ -213,6 +221,9 @@ export class DfirService implements SecurityModule<
     }
   }
 
+  // Incident plus its full DfirLink[], the data behind the incident-detail
+  // view (an incident's links are its trace back to whatever records across
+  // other modules led to it, per the polymorphic DfirLink design).
   async getIncidentDetail(
     tenantId: string,
     id: string,

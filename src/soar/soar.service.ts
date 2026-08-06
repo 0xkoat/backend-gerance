@@ -50,6 +50,13 @@ export class SoarService implements SecurityModule<
     await this.evaluateTriggers(event.tenantId, data.alertId, event.severity);
   }
 
+  // Only checks isActive playbooks (a deactivated one is skipped without
+  // being deleted) and only ever matches on a literal `severity` key.
+  // TriggerConditionDto enforces that shape at creation time, so any other
+  // key in triggerCondition would silently fail every check here. Execution
+  // is fully simulated, there's no real SOAR engine to call, so every match
+  // immediately creates a SUCCESS execution row, with no PENDING/RUNNING
+  // window.
   async evaluateTriggers(
     tenantId: string,
     alertId: string,
@@ -93,12 +100,17 @@ export class SoarService implements SecurityModule<
     }
   }
 
+  // Fourth hop of the chain: every new SIEM alert is checked against active
+  // playbooks at its original severity.
   @OnEvent('siem.alert.created')
   async handleSiemAlert(event: UnifiedEvent): Promise<void> {
     const data = event.data as { alertId: string };
     await this.evaluateTriggers(event.tenantId, data.alertId, event.severity);
   }
 
+  // An alert that didn't trigger a playbook at its original severity gets a
+  // second chance here once CTI escalates it (e.g. LOW -> CRITICAL on an
+  // IOC match).
   @OnEvent('cti.enrichment.applied')
   async handleCtiEnrichment(payload: CtiEnrichmentPayload): Promise<void> {
     await this.evaluateTriggers(

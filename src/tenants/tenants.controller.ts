@@ -16,6 +16,9 @@ import { UpdateTenantModuleDto } from './dto/updateTenantModule.dto';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { ModuleName, UserRole } from '../generated/prisma/client';
 
+// Class-level @Roles gates every route here to Super Admin. Tenant
+// provisioning/module-activation is platform administration, never
+// delegated to a tenant's own Admins.
 @Controller('tenants')
 @Roles(UserRole.SUPER_ADMIN)
 export class TenantsController {
