@@ -112,6 +112,31 @@ export class DfirService implements SecurityModule<
     });
   }
 
+  // Nothing references DfirLink (it's the leaf of the polymorphic link, not
+  // a parent), so this is a plain, unguarded delete — no RESTRICT-FK
+  // concern the way SoarPlaybook/EdrEndpoint/VmAsset deletion had.
+  async unlinkRecord(
+    tenantId: string,
+    incidentId: string,
+    linkId: string,
+  ): Promise<void> {
+    const incident = await this.prisma.dfirIncident.findUnique({
+      where: { id: incidentId },
+    });
+    if (!incident || incident.tenantId !== tenantId) {
+      throw new NotFoundException('Incident not found');
+    }
+
+    const link = await this.prisma.dfirLink.findUnique({
+      where: { id: linkId },
+    });
+    if (!link || link.tenantId !== tenantId || link.incidentId !== incidentId) {
+      throw new NotFoundException('Link not found');
+    }
+
+    await this.prisma.dfirLink.delete({ where: { id: linkId } });
+  }
+
   @OnEvent('soar.execution.created')
   async handleSoarExecution(payload: SoarExecutionPayload): Promise<void> {
     const alert = await this.prisma.siemAlert.findUnique({
@@ -142,6 +167,7 @@ export class DfirService implements SecurityModule<
     const {
       tenantId,
       severity,
+      assignedToUserId,
       dateFrom,
       dateTo,
       page = 1,
@@ -153,6 +179,7 @@ export class DfirService implements SecurityModule<
       tenantId,
       ...(severity && { severity }),
       ...(status && { status }),
+      ...(assignedToUserId && { assignedToUserId }),
       ...((dateFrom || dateTo) && {
         createdAt: {
           ...(dateFrom && { gte: dateFrom }),
@@ -233,6 +260,42 @@ export class DfirService implements SecurityModule<
       source: ModuleName.DFIR,
       recordId: updated.id,
       assignedToUserId: assigneeId,
+      status: updated.status,
+      timestamp: new Date(),
+    });
+
+    return updated;
+  }
+
+  async unassignIncident(
+    tenantId: string,
+    id: string,
+    caller: AuthenticatedUser,
+  ): Promise<DfirIncident> {
+    const incident = await this.prisma.dfirIncident.findUnique({
+      where: { id },
+    });
+    if (!incident || incident.tenantId !== tenantId) {
+      throw new NotFoundException('Incident not found');
+    }
+
+    assertCanTransitionStatus(caller, incident.assignedToUserId);
+
+    if (!TRANSITIONABLE_STATUSES.includes(incident.status)) {
+      throw new ConflictException(
+        'Incident must be currently assigned and not yet contained/resolved to be unassigned',
+      );
+    }
+
+    const updated = await this.prisma.dfirIncident.update({
+      where: { id },
+      data: { assignedToUserId: null, status: DfirIncidentStatus.OPEN },
+    });
+
+    this.eventEmitter.emit('dfir.incident.unassigned', {
+      tenantId,
+      source: ModuleName.DFIR,
+      recordId: updated.id,
       status: updated.status,
       timestamp: new Date(),
     });

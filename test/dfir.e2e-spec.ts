@@ -90,8 +90,10 @@ describe('DfirController (e2e)', () => {
     query: jest.fn(),
     getIncidentDetail: jest.fn(),
     assignIncident: jest.fn(),
+    unassignIncident: jest.fn(),
     updateStatus: jest.fn(),
     linkRecord: jest.fn(),
+    unlinkRecord: jest.fn(),
   };
 
   async function loginAs(email: string): Promise<string> {
@@ -233,6 +235,37 @@ describe('DfirController (e2e)', () => {
     });
   });
 
+  describe('DELETE /dfir/incidents/:id/assign', () => {
+    it('allows an Analyst to unassign', async () => {
+      const token = await loginAs(analystUser.email);
+      mockDfirService.unassignIncident.mockResolvedValue({
+        id: 'incident-1',
+        status: DfirIncidentStatus.OPEN,
+      });
+
+      await request(app.getHttpServer())
+        .delete('/api/dfir/incidents/incident-1/assign')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(mockDfirService.unassignIncident).toHaveBeenCalledWith(
+        'tenant-1',
+        'incident-1',
+        expect.objectContaining({ role: UserRole.ANALYST }),
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .delete('/api/dfir/incidents/incident-1/assign')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      expect(mockDfirService.unassignIncident).not.toHaveBeenCalled();
+    });
+  });
+
   describe('PATCH /dfir/incidents/:id/status', () => {
     it('allows an Analyst to update incident status', async () => {
       const token = await loginAs(analystUser.email);
@@ -312,6 +345,34 @@ describe('DfirController (e2e)', () => {
         })
         .expect(400);
       expect(mockDfirService.linkRecord).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DELETE /dfir/incidents/:id/links/:linkId', () => {
+    it('allows an Analyst to unlink a record', async () => {
+      const token = await loginAs(analystUser.email);
+      mockDfirService.unlinkRecord.mockResolvedValue(undefined);
+
+      await request(app.getHttpServer())
+        .delete('/api/dfir/incidents/incident-1/links/link-1')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(mockDfirService.unlinkRecord).toHaveBeenCalledWith(
+        'tenant-1',
+        'incident-1',
+        'link-1',
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .delete('/api/dfir/incidents/incident-1/links/link-1')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      expect(mockDfirService.unlinkRecord).not.toHaveBeenCalled();
     });
   });
 });

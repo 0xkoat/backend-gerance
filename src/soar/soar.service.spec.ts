@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { Logger } from '@nestjs/common';
+import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { SoarService, SoarQueryFilters } from './soar.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -16,12 +16,16 @@ import {
 const mockPrismaService = {
   soarPlaybook: {
     findMany: jest.fn(),
+    findUnique: jest.fn(),
     create: jest.fn(),
+    update: jest.fn(),
+    delete: jest.fn(),
   },
   soarExecution: {
     create: jest.fn(),
     findMany: jest.fn(),
     findFirst: jest.fn(),
+    count: jest.fn(),
   },
 };
 
@@ -148,7 +152,7 @@ describe('SoarService', () => {
       await service.ingest(event);
 
       expect(mockPrismaService.soarPlaybook.findMany).toHaveBeenCalledWith({
-        where: { tenantId: 'tenant-1' },
+        where: { tenantId: 'tenant-1', isActive: true },
       });
     });
 
@@ -183,7 +187,7 @@ describe('SoarService', () => {
       await service.handleSiemAlert(event);
 
       expect(mockPrismaService.soarPlaybook.findMany).toHaveBeenCalledWith({
-        where: { tenantId: 'tenant-1' },
+        where: { tenantId: 'tenant-1', isActive: true },
       });
     });
   });
@@ -313,6 +317,92 @@ describe('SoarService', () => {
       expect(mockPrismaService.soarPlaybook.create).toHaveBeenCalledWith({
         data: { tenantId: 'tenant-1', ...dto },
       });
+    });
+  });
+
+  describe('updatePlaybook', () => {
+    it('updates a playbook scoped to the tenant', async () => {
+      const existing = { id: 'playbook-1', tenantId: 'tenant-1' };
+      const updated = { ...existing, isActive: false };
+      mockPrismaService.soarPlaybook.findUnique.mockResolvedValue(existing);
+      mockPrismaService.soarPlaybook.update.mockResolvedValue(updated);
+
+      const result = await service.updatePlaybook('tenant-1', 'playbook-1', {
+        isActive: false,
+      });
+
+      expect(result).toEqual(updated);
+      expect(mockPrismaService.soarPlaybook.update).toHaveBeenCalledWith({
+        where: { id: 'playbook-1' },
+        data: { isActive: false },
+      });
+    });
+
+    it('throws NotFoundException when the playbook belongs to another tenant', async () => {
+      mockPrismaService.soarPlaybook.findUnique.mockResolvedValue({
+        id: 'playbook-1',
+        tenantId: 'tenant-2',
+      });
+
+      await expect(
+        service.updatePlaybook('tenant-1', 'playbook-1', { isActive: false }),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.soarPlaybook.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the playbook does not exist', async () => {
+      mockPrismaService.soarPlaybook.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.updatePlaybook('tenant-1', 'missing', { isActive: false }),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('deletePlaybook', () => {
+    it('deletes a playbook scoped to the tenant when it has no executions', async () => {
+      mockPrismaService.soarPlaybook.findUnique.mockResolvedValue({
+        id: 'playbook-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.soarExecution.count.mockResolvedValue(0);
+      mockPrismaService.soarPlaybook.delete.mockResolvedValue({
+        id: 'playbook-1',
+      });
+
+      await service.deletePlaybook('tenant-1', 'playbook-1');
+
+      expect(mockPrismaService.soarExecution.count).toHaveBeenCalledWith({
+        where: { playbookId: 'playbook-1' },
+      });
+      expect(mockPrismaService.soarPlaybook.delete).toHaveBeenCalledWith({
+        where: { id: 'playbook-1' },
+      });
+    });
+
+    it('throws NotFoundException when the playbook belongs to another tenant', async () => {
+      mockPrismaService.soarPlaybook.findUnique.mockResolvedValue({
+        id: 'playbook-1',
+        tenantId: 'tenant-2',
+      });
+
+      await expect(
+        service.deletePlaybook('tenant-1', 'playbook-1'),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.soarPlaybook.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws ConflictException pointing at isActive when the playbook still has executions', async () => {
+      mockPrismaService.soarPlaybook.findUnique.mockResolvedValue({
+        id: 'playbook-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.soarExecution.count.mockResolvedValue(2);
+
+      await expect(
+        service.deletePlaybook('tenant-1', 'playbook-1'),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.soarPlaybook.delete).not.toHaveBeenCalled();
     });
   });
 });

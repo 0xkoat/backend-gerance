@@ -9,7 +9,13 @@ import { UsersService } from './../src/users/users.service';
 import { PrismaService } from './../src/prisma/prisma.service';
 import { UserRole } from './../src/generated/prisma/enums';
 
-describe('AppController (e2e)', () => {
+// Cross-cutting hardening that isn't specific to any one module — forgot-
+// password, helmet response headers, and auth rate-limiting. Originally
+// lived in test/app.e2e-spec.ts (piggybacking on the default NestJS
+// boilerplate AppController's `GET /api/` route as a convenient "protected,
+// no @Roles()" target); moved here and re-targeted at GET /api/users/me
+// after that boilerplate controller/service were removed as dead code.
+describe('Security hardening (e2e)', () => {
   let app: INestApplication<App>;
 
   const dbUser = {
@@ -23,11 +29,15 @@ describe('AppController (e2e)', () => {
     mustChangePassword: false,
     failedLoginAttempts: 0,
     lockedUntil: null,
+    passwordResetRequestedAt: null,
+    createdAt: new Date(),
+    updatedAt: new Date(),
   };
 
   const mockUsersService = {
     findByEmail: jest.fn(),
     requestPasswordReset: jest.fn(),
+    findByIdForTenant: jest.fn(),
   };
 
   beforeAll(async () => {
@@ -36,6 +46,7 @@ describe('AppController (e2e)', () => {
 
   beforeEach(async () => {
     mockUsersService.findByEmail.mockReset();
+    mockUsersService.findByIdForTenant.mockReset();
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
@@ -71,7 +82,7 @@ describe('AppController (e2e)', () => {
   });
 
   it('rejects a protected route with no token', () => {
-    return request(app.getHttpServer()).get('/api/').expect(401);
+    return request(app.getHttpServer()).get('/api/users/me').expect(401);
   });
 
   it('logs in with valid credentials and returns an access_token', async () => {
@@ -97,6 +108,7 @@ describe('AppController (e2e)', () => {
 
   it('accepts a real JWT on a protected route with no @Roles() restriction', async () => {
     mockUsersService.findByEmail.mockResolvedValue(dbUser);
+    mockUsersService.findByIdForTenant.mockResolvedValue(dbUser);
 
     const loginResponse = await request(app.getHttpServer())
       .post('/api/auth/login')
@@ -107,11 +119,12 @@ describe('AppController (e2e)', () => {
       access_token: string;
     };
 
-    return request(app.getHttpServer())
-      .get('/api/')
+    const response = await request(app.getHttpServer())
+      .get('/api/users/me')
       .set('Authorization', `Bearer ${token}`)
-      .expect(200)
-      .expect('Hello World!');
+      .expect(200);
+
+    expect(response.body).toMatchObject({ email: 'bob@x.com' });
   });
 
   it('login response includes mustChangePassword', async () => {

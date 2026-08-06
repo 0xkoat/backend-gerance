@@ -10,6 +10,8 @@ import { SoarQueryDto } from './dto/soarQuery.dto';
 const mockSoarService = {
   listPlaybooks: jest.fn(),
   createPlaybook: jest.fn(),
+  updatePlaybook: jest.fn(),
+  deletePlaybook: jest.fn(),
   query: jest.fn(),
 };
 
@@ -96,6 +98,57 @@ describe('SoarController', () => {
         controller.createPlaybook(noTenantAdmin, dto),
       ).rejects.toThrow(ForbiddenException);
       expect(mockSoarService.createPlaybook).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updatePlaybook', () => {
+    it('passes the tenant and id to the service', async () => {
+      const updated = {
+        id: 'playbook-1',
+        tenantId: 'tenant-1',
+        isActive: false,
+      };
+      mockSoarService.updatePlaybook.mockResolvedValue(updated);
+
+      const result = await controller.updatePlaybook(admin, 'playbook-1', {
+        isActive: false,
+      });
+
+      expect(result).toEqual(updated);
+      expect(mockSoarService.updatePlaybook).toHaveBeenCalledWith(
+        'tenant-1',
+        'playbook-1',
+        { isActive: false },
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      await expect(
+        controller.updatePlaybook(noTenantAdmin, 'playbook-1', {
+          isActive: false,
+        }),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockSoarService.updatePlaybook).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deletePlaybook', () => {
+    it('passes the tenant and id to the service', async () => {
+      mockSoarService.deletePlaybook.mockResolvedValue(undefined);
+
+      await controller.deletePlaybook(admin, 'playbook-1');
+
+      expect(mockSoarService.deletePlaybook).toHaveBeenCalledWith(
+        'tenant-1',
+        'playbook-1',
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      await expect(
+        controller.deletePlaybook(noTenantAdmin, 'playbook-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockSoarService.deletePlaybook).not.toHaveBeenCalled();
     });
   });
 

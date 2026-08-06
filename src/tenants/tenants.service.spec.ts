@@ -3,7 +3,7 @@ import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { TenantsService } from './tenants.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma, UserRole } from '../generated/prisma/client';
+import { ModuleName, Prisma, UserRole } from '../generated/prisma/client';
 import { CreateTenantDto } from './dto/createTenant.dto';
 
 jest.mock('argon2');
@@ -26,12 +26,17 @@ const mockPrismaService = {
   tenant: {
     findMany: jest.fn(),
     findUnique: jest.fn(),
+    update: jest.fn(),
     delete: jest.fn(),
   },
   user: {
     deleteMany: jest.fn(),
   },
   tenantModule: {
+    findMany: jest.fn(),
+    create: jest.fn(),
+    update: jest.fn(),
+    delete: jest.fn(),
     deleteMany: jest.fn(),
   },
   assetFeedEntry: { deleteMany: jest.fn() },
@@ -46,6 +51,8 @@ const mockPrismaService = {
   ctiIoc: { deleteMany: jest.fn() },
   vmVulnerability: { deleteMany: jest.fn() },
   vmAsset: { deleteMany: jest.fn() },
+  refreshToken: { deleteMany: jest.fn() },
+  passwordHistory: { deleteMany: jest.fn() },
   $transaction: jest.fn(defaultTransactionImplementation),
 };
 
@@ -215,6 +222,209 @@ describe('TenantsService', () => {
     });
   });
 
+  describe('renameTenant', () => {
+    it('renames a tenant that exists', async () => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        id: 'tenant-1',
+        name: 'Old Name',
+      });
+      mockPrismaService.tenant.update.mockResolvedValue({
+        id: 'tenant-1',
+        name: 'New Name',
+      });
+
+      const result = await service.renameTenant('tenant-1', 'New Name');
+
+      expect(result).toEqual({ id: 'tenant-1', name: 'New Name' });
+      expect(mockPrismaService.tenant.update).toHaveBeenCalledWith({
+        where: { id: 'tenant-1' },
+        data: { name: 'New Name' },
+      });
+    });
+
+    it('throws NotFoundException when the tenant does not exist', async () => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.renameTenant('missing-id', 'New Name'),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.tenant.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('listModules', () => {
+    it('returns modules scoped to the tenant', async () => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        id: 'tenant-1',
+      });
+      const modules = [
+        { id: 'tm-1', tenantId: 'tenant-1', moduleName: ModuleName.SIEM },
+      ];
+      mockPrismaService.tenantModule.findMany.mockResolvedValue(modules);
+
+      const result = await service.listModules('tenant-1');
+
+      expect(result).toEqual(modules);
+      expect(mockPrismaService.tenantModule.findMany).toHaveBeenCalledWith({
+        where: { tenantId: 'tenant-1' },
+      });
+    });
+
+    it('throws NotFoundException when the tenant does not exist', async () => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue(null);
+
+      await expect(service.listModules('missing-id')).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  describe('activateModule', () => {
+    it('creates a TenantModule row', async () => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        id: 'tenant-1',
+      });
+      const created = {
+        id: 'tm-1',
+        tenantId: 'tenant-1',
+        moduleName: ModuleName.EDR,
+        isActive: true,
+      };
+      mockPrismaService.tenantModule.create.mockResolvedValue(created);
+
+      const result = await service.activateModule('tenant-1', ModuleName.EDR, {
+        pollIntervalMinutes: 5,
+      });
+
+      expect(result).toEqual(created);
+      expect(mockPrismaService.tenantModule.create).toHaveBeenCalledWith({
+        data: {
+          tenantId: 'tenant-1',
+          moduleName: ModuleName.EDR,
+          config: { pollIntervalMinutes: 5 },
+        },
+      });
+    });
+
+    it('throws ConflictException when the module is already configured (P2002)', async () => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        id: 'tenant-1',
+      });
+      mockPrismaService.tenantModule.create.mockRejectedValue(
+        prismaKnownError('P2002'),
+      );
+
+      await expect(
+        service.activateModule('tenant-1', ModuleName.EDR),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('throws NotFoundException when the tenant does not exist', async () => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.activateModule('missing-id', ModuleName.EDR),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.tenantModule.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateModule', () => {
+    it('updates a TenantModule row', async () => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        id: 'tenant-1',
+      });
+      const updated = {
+        id: 'tm-1',
+        tenantId: 'tenant-1',
+        moduleName: ModuleName.EDR,
+        isActive: false,
+      };
+      mockPrismaService.tenantModule.update.mockResolvedValue(updated);
+
+      const result = await service.updateModule('tenant-1', ModuleName.EDR, {
+        isActive: false,
+      });
+
+      expect(result).toEqual(updated);
+      expect(mockPrismaService.tenantModule.update).toHaveBeenCalledWith({
+        where: {
+          tenantId_moduleName: {
+            tenantId: 'tenant-1',
+            moduleName: ModuleName.EDR,
+          },
+        },
+        data: { isActive: false },
+      });
+    });
+
+    it('throws NotFoundException when the module is not configured (P2025)', async () => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        id: 'tenant-1',
+      });
+      mockPrismaService.tenantModule.update.mockRejectedValue(
+        prismaKnownError('P2025'),
+      );
+
+      await expect(
+        service.updateModule('tenant-1', ModuleName.EDR, { isActive: false }),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws NotFoundException when the tenant does not exist', async () => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.updateModule('missing-id', ModuleName.EDR, {}),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.tenantModule.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deactivateModule', () => {
+    it('deletes a TenantModule row', async () => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        id: 'tenant-1',
+      });
+      mockPrismaService.tenantModule.delete.mockResolvedValue({
+        id: 'tm-1',
+      });
+
+      await service.deactivateModule('tenant-1', ModuleName.EDR);
+
+      expect(mockPrismaService.tenantModule.delete).toHaveBeenCalledWith({
+        where: {
+          tenantId_moduleName: {
+            tenantId: 'tenant-1',
+            moduleName: ModuleName.EDR,
+          },
+        },
+      });
+    });
+
+    it('throws NotFoundException when the module is not configured (P2025)', async () => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        id: 'tenant-1',
+      });
+      mockPrismaService.tenantModule.delete.mockRejectedValue(
+        prismaKnownError('P2025'),
+      );
+
+      await expect(
+        service.deactivateModule('tenant-1', ModuleName.EDR),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws NotFoundException when the tenant does not exist', async () => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.deactivateModule('missing-id', ModuleName.EDR),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.tenantModule.delete).not.toHaveBeenCalled();
+    });
+  });
+
   describe('deleteTenantWithUsers', () => {
     const existingTenant = {
       id: 'tenant-1',
@@ -252,6 +462,12 @@ describe('TenantsService', () => {
           where: { tenantId: 'tenant-1' },
         });
       }
+      expect(mockPrismaService.refreshToken.deleteMany).toHaveBeenCalledWith({
+        where: { user: { tenantId: 'tenant-1' } },
+      });
+      expect(mockPrismaService.passwordHistory.deleteMany).toHaveBeenCalledWith(
+        { where: { user: { tenantId: 'tenant-1' } } },
+      );
       expect(mockPrismaService.tenant.delete).toHaveBeenCalledWith({
         where: { id: 'tenant-1' },
       });
@@ -282,6 +498,11 @@ describe('TenantsService', () => {
         mockPrismaService.vmVulnerability.deleteMany,
       );
       trackCall('vmAsset', mockPrismaService.vmAsset.deleteMany);
+      trackCall('refreshToken', mockPrismaService.refreshToken.deleteMany);
+      trackCall(
+        'passwordHistory',
+        mockPrismaService.passwordHistory.deleteMany,
+      );
       trackCall('user', mockPrismaService.user.deleteMany);
 
       await service.deleteTenantWithUsers('tenant-1');
@@ -302,6 +523,12 @@ describe('TenantsService', () => {
         callOrder.indexOf('vmAsset'),
       );
       expect(callOrder.indexOf('siemAlert')).toBeLessThan(
+        callOrder.indexOf('user'),
+      );
+      expect(callOrder.indexOf('refreshToken')).toBeLessThan(
+        callOrder.indexOf('user'),
+      );
+      expect(callOrder.indexOf('passwordHistory')).toBeLessThan(
         callOrder.indexOf('user'),
       );
     });

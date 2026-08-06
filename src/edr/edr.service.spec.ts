@@ -17,6 +17,9 @@ const mockPrismaService = {
   edrEndpoint: {
     upsert: jest.fn(),
     findMany: jest.fn(),
+    findUnique: jest.fn(),
+    update: jest.fn(),
+    delete: jest.fn(),
   },
   edrDetection: {
     create: jest.fn(),
@@ -24,6 +27,7 @@ const mockPrismaService = {
     findFirst: jest.fn(),
     findUnique: jest.fn(),
     update: jest.fn(),
+    count: jest.fn(),
   },
   user: {
     findFirst: jest.fn(),
@@ -171,6 +175,21 @@ describe('EdrService', () => {
       );
     });
 
+    it('filters by assignedToUserId when provided', async () => {
+      mockPrismaService.edrDetection.findMany.mockResolvedValue([]);
+
+      await service.query({
+        tenantId: 'tenant-1',
+        assignedToUserId: 'analyst-1',
+      });
+
+      expect(mockPrismaService.edrDetection.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { tenantId: 'tenant-1', assignedToUserId: 'analyst-1' },
+        }),
+      );
+    });
+
     it('builds a createdAt range when dateFrom/dateTo are provided', async () => {
       const dateFrom = new Date('2026-01-01');
       const dateTo = new Date('2026-01-31');
@@ -257,6 +276,86 @@ describe('EdrService', () => {
     });
   });
 
+  describe('updateEndpoint', () => {
+    it('updates an endpoint scoped to the tenant', async () => {
+      const existing = { id: 'endpoint-1', tenantId: 'tenant-1' };
+      const updated = { ...existing, hostname: 'renamed-host' };
+      mockPrismaService.edrEndpoint.findUnique.mockResolvedValue(existing);
+      mockPrismaService.edrEndpoint.update.mockResolvedValue(updated);
+
+      const result = await service.updateEndpoint('tenant-1', 'endpoint-1', {
+        hostname: 'renamed-host',
+      });
+
+      expect(result).toEqual(updated);
+      expect(mockPrismaService.edrEndpoint.update).toHaveBeenCalledWith({
+        where: { id: 'endpoint-1' },
+        data: { hostname: 'renamed-host' },
+      });
+    });
+
+    it('throws when the endpoint belongs to another tenant', async () => {
+      mockPrismaService.edrEndpoint.findUnique.mockResolvedValue({
+        id: 'endpoint-1',
+        tenantId: 'tenant-2',
+      });
+
+      await expect(
+        service.updateEndpoint('tenant-1', 'endpoint-1', {
+          hostname: 'x',
+        }),
+      ).rejects.toThrow('Endpoint not found');
+      expect(mockPrismaService.edrEndpoint.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteEndpoint', () => {
+    it('deletes an endpoint scoped to the tenant when it has no detections', async () => {
+      mockPrismaService.edrEndpoint.findUnique.mockResolvedValue({
+        id: 'endpoint-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.edrDetection.count.mockResolvedValue(0);
+      mockPrismaService.edrEndpoint.delete.mockResolvedValue({
+        id: 'endpoint-1',
+      });
+
+      await service.deleteEndpoint('tenant-1', 'endpoint-1');
+
+      expect(mockPrismaService.edrDetection.count).toHaveBeenCalledWith({
+        where: { endpointId: 'endpoint-1' },
+      });
+      expect(mockPrismaService.edrEndpoint.delete).toHaveBeenCalledWith({
+        where: { id: 'endpoint-1' },
+      });
+    });
+
+    it('throws ConflictException pointing at DECOMMISSIONED when detections exist', async () => {
+      mockPrismaService.edrEndpoint.findUnique.mockResolvedValue({
+        id: 'endpoint-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.edrDetection.count.mockResolvedValue(3);
+
+      await expect(
+        service.deleteEndpoint('tenant-1', 'endpoint-1'),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.edrEndpoint.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws when the endpoint belongs to another tenant', async () => {
+      mockPrismaService.edrEndpoint.findUnique.mockResolvedValue({
+        id: 'endpoint-1',
+        tenantId: 'tenant-2',
+      });
+
+      await expect(
+        service.deleteEndpoint('tenant-1', 'endpoint-1'),
+      ).rejects.toThrow('Endpoint not found');
+      expect(mockPrismaService.edrEndpoint.delete).not.toHaveBeenCalled();
+    });
+  });
+
   describe('assignDetection', () => {
     const existing = {
       id: 'detection-1',
@@ -317,6 +416,79 @@ describe('EdrService', () => {
 
       await expect(
         service.assignDetection('tenant-1', 'missing-id', caller, 'analyst-1'),
+      ).rejects.toThrow('Detection not found');
+    });
+  });
+
+  describe('unassignDetection', () => {
+    const assigned = {
+      id: 'detection-1',
+      tenantId: 'tenant-1',
+      status: EdrDetectionStatus.ASSIGNED,
+      assignedToUserId: 'analyst-1',
+    };
+
+    it('lets the assignee unassign, reverting status to OPEN', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-1' });
+      mockPrismaService.edrDetection.findUnique.mockResolvedValue(assigned);
+      mockPrismaService.edrDetection.update.mockResolvedValue({
+        ...assigned,
+        assignedToUserId: null,
+        status: EdrDetectionStatus.OPEN,
+      });
+
+      const result = await service.unassignDetection(
+        'tenant-1',
+        'detection-1',
+        caller,
+      );
+
+      expect(result.status).toBe(EdrDetectionStatus.OPEN);
+      expect(mockPrismaService.edrDetection.update).toHaveBeenCalledWith({
+        where: { id: 'detection-1' },
+        data: { assignedToUserId: null, status: EdrDetectionStatus.OPEN },
+      });
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+        'edr.detection.unassigned',
+        expect.objectContaining({
+          tenantId: 'tenant-1',
+          source: ModuleName.EDR,
+          recordId: 'detection-1',
+          status: EdrDetectionStatus.OPEN,
+        }),
+      );
+    });
+
+    it('rejects an Analyst who is not the assignee', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-2' });
+      mockPrismaService.edrDetection.findUnique.mockResolvedValue(assigned);
+
+      await expect(
+        service.unassignDetection('tenant-1', 'detection-1', caller),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrismaService.edrDetection.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects unassigning a detection that was never assigned', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.edrDetection.findUnique.mockResolvedValue({
+        ...assigned,
+        status: EdrDetectionStatus.OPEN,
+        assignedToUserId: null,
+      });
+
+      await expect(
+        service.unassignDetection('tenant-1', 'detection-1', caller),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.edrDetection.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the detection does not exist', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.edrDetection.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.unassignDetection('tenant-1', 'missing-id', caller),
       ).rejects.toThrow('Detection not found');
     });
   });

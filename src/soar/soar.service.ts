@@ -1,4 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { EventEmitter2, OnEvent } from '@nestjs/event-emitter';
 import {
   Prisma,
@@ -51,7 +56,7 @@ export class SoarService implements SecurityModule<
     severity: Severity,
   ): Promise<void> {
     const playbooks = await this.prisma.soarPlaybook.findMany({
-      where: { tenantId },
+      where: { tenantId, isActive: true },
     });
 
     for (const playbook of playbooks) {
@@ -168,5 +173,59 @@ export class SoarService implements SecurityModule<
         actions: dto.actions,
       },
     });
+  }
+
+  async updatePlaybook(
+    tenantId: string,
+    id: string,
+    dto: {
+      name?: string;
+      triggerCondition?: object;
+      actions?: object;
+      isActive?: boolean;
+    },
+  ): Promise<SoarPlaybook> {
+    const playbook = await this.prisma.soarPlaybook.findUnique({
+      where: { id },
+    });
+    if (!playbook || playbook.tenantId !== tenantId) {
+      throw new NotFoundException('Playbook not found');
+    }
+
+    return this.prisma.soarPlaybook.update({
+      where: { id },
+      data: dto,
+    });
+  }
+
+  // A hard delete would be blocked by the RESTRICT FK from SoarExecution
+  // once a playbook has actually fired — those executions are an audit
+  // trail, not something a playbook delete should silently take down with
+  // it. Checked explicitly with a count() up front rather than attempting
+  // the delete and catching the FK violation: under this project's Prisma 7
+  // driver-adapter setup, that violation surfaces as a raw
+  // DriverAdapterError (a Postgres-level error, `cause.kind ===
+  // 'ForeignKeyConstraintViolation'`), not the `PrismaClientKnownRequestError`
+  // with a `P20xx` code you'd get without the adapter — confirmed live
+  // against the real dev DB. A pre-check avoids depending on that
+  // adapter-internal error shape at all.
+  async deletePlaybook(tenantId: string, id: string): Promise<void> {
+    const playbook = await this.prisma.soarPlaybook.findUnique({
+      where: { id },
+    });
+    if (!playbook || playbook.tenantId !== tenantId) {
+      throw new NotFoundException('Playbook not found');
+    }
+
+    const executionCount = await this.prisma.soarExecution.count({
+      where: { playbookId: id },
+    });
+    if (executionCount > 0) {
+      throw new ConflictException(
+        'Cannot delete a playbook that has existing executions — deactivate it instead (PATCH with isActive: false)',
+      );
+    }
+
+    await this.prisma.soarPlaybook.delete({ where: { id } });
   }
 }

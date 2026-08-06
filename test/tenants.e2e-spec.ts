@@ -57,12 +57,17 @@ describe('TenantsController (e2e)', () => {
     tenant: {
       findMany: jest.fn(),
       findUnique: jest.fn(),
+      update: jest.fn(),
       delete: jest.fn(),
     },
     user: {
       deleteMany: jest.fn(),
     },
     tenantModule: {
+      findMany: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
       deleteMany: jest.fn(),
     },
     assetFeedEntry: { deleteMany: jest.fn() },
@@ -80,7 +85,11 @@ describe('TenantsController (e2e)', () => {
     $transaction: jest.fn(),
     onModuleInit: jest.fn(),
     onModuleDestroy: jest.fn(),
-    refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
+    refreshToken: {
+      create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+      deleteMany: jest.fn(),
+    },
+    passwordHistory: { deleteMany: jest.fn() },
   };
 
   async function loginAs(email: string): Promise<string> {
@@ -286,6 +295,165 @@ describe('TenantsController (e2e)', () => {
     });
   });
 
+  describe('PATCH /tenants/:id', () => {
+    it('allows a Super Admin to rename a tenant', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        id: 'tenant-1',
+        name: 'Old Name',
+      });
+      mockPrismaService.tenant.update.mockResolvedValue({
+        id: 'tenant-1',
+        name: 'New Name',
+      });
+
+      const response = await request(app.getHttpServer())
+        .patch('/api/tenants/tenant-1')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'New Name' })
+        .expect(200);
+
+      expect(mockPrismaService.tenant.update).toHaveBeenCalledWith({
+        where: { id: 'tenant-1' },
+        data: { name: 'New Name' },
+      });
+      expect(response.body).toMatchObject({ name: 'New Name' });
+    });
+
+    it('returns 404 when the tenant does not exist', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenant.findUnique.mockResolvedValue(null);
+
+      await request(app.getHttpServer())
+        .patch('/api/tenants/missing-id')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'New Name' })
+        .expect(404);
+    });
+
+    it('rejects an Admin', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .patch('/api/tenants/tenant-1')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'New Name' })
+        .expect(403);
+      expect(mockPrismaService.tenant.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('tenant modules', () => {
+    beforeEach(() => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        id: 'tenant-1',
+        name: 'Tenant One',
+      });
+    });
+
+    it("allows a Super Admin to list a tenant's modules", async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenantModule.findMany.mockResolvedValue([
+        { id: 'tm-1', tenantId: 'tenant-1', moduleName: 'SIEM' },
+      ]);
+
+      const response = await request(app.getHttpServer())
+        .get('/api/tenants/tenant-1/modules')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(response.body).toHaveLength(1);
+    });
+
+    it('allows a Super Admin to activate a module', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenantModule.create.mockResolvedValue({
+        id: 'tm-1',
+        tenantId: 'tenant-1',
+        moduleName: 'EDR',
+        isActive: true,
+      });
+
+      const response = await request(app.getHttpServer())
+        .post('/api/tenants/tenant-1/modules')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ moduleName: 'EDR' })
+        .expect(201);
+
+      expect(mockPrismaService.tenantModule.create).toHaveBeenCalledWith({
+        data: { tenantId: 'tenant-1', moduleName: 'EDR', config: undefined },
+      });
+      expect(response.body).toMatchObject({ moduleName: 'EDR' });
+    });
+
+    it('rejects an invalid moduleName', async () => {
+      const token = await loginAs(superAdminUser.email);
+
+      await request(app.getHttpServer())
+        .post('/api/tenants/tenant-1/modules')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ moduleName: 'NOT_A_MODULE' })
+        .expect(400);
+      expect(mockPrismaService.tenantModule.create).not.toHaveBeenCalled();
+    });
+
+    it('allows a Super Admin to update a module', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenantModule.update.mockResolvedValue({
+        id: 'tm-1',
+        tenantId: 'tenant-1',
+        moduleName: 'EDR',
+        isActive: false,
+      });
+
+      const response = await request(app.getHttpServer())
+        .patch('/api/tenants/tenant-1/modules/EDR')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ isActive: false })
+        .expect(200);
+
+      expect(mockPrismaService.tenantModule.update).toHaveBeenCalledWith({
+        where: {
+          tenantId_moduleName: { tenantId: 'tenant-1', moduleName: 'EDR' },
+        },
+        data: { isActive: false },
+      });
+      expect(response.body).toMatchObject({ isActive: false });
+    });
+
+    it('allows a Super Admin to deactivate (remove) a module', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenantModule.delete.mockResolvedValue({
+        id: 'tm-1',
+      });
+
+      await request(app.getHttpServer())
+        .delete('/api/tenants/tenant-1/modules/EDR')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(mockPrismaService.tenantModule.delete).toHaveBeenCalledWith({
+        where: {
+          tenantId_moduleName: { tenantId: 'tenant-1', moduleName: 'EDR' },
+        },
+      });
+    });
+
+    it('rejects an Admin from every module route', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .get('/api/tenants/tenant-1/modules')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      await request(app.getHttpServer())
+        .post('/api/tenants/tenant-1/modules')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ moduleName: 'EDR' })
+        .expect(403);
+    });
+  });
+
   describe('DELETE /tenants/:id', () => {
     it('allows a Super Admin to delete a tenant and all its accounts', async () => {
       const token = await loginAs(superAdminUser.email);
@@ -309,6 +477,8 @@ describe('TenantsController (e2e)', () => {
         { count: 0 }, // vmVulnerability
         { count: 0 }, // vmAsset
         { count: 1 }, // tenantModule
+        { count: 3 }, // refreshToken
+        { count: 3 }, // passwordHistory
         { count: 3 }, // user
         {
           id: 'tenant-1',

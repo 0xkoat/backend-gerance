@@ -79,6 +79,11 @@ describe('EventsService', () => {
         'dfir.incident.assigned',
         'dfir.incident.status_changed',
         'vm.vulnerability.assigned',
+        'siem.alert.unassigned',
+        'edr.detection.unassigned',
+        'dfir.incident.unassigned',
+        'vm.vulnerability.unassigned',
+        'cti.ioc.deleted',
       ];
       eventNames.forEach((name) =>
         eventEmitter.emit(name, { tenantId: 'tenant-1' }),

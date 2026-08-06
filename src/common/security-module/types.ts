@@ -23,6 +23,7 @@ export interface ModuleHealth {
 export interface BaseQueryFilters {
   tenantId: string;
   severity?: Severity;
+  assignedToUserId?: string;
   dateFrom?: Date;
   dateTo?: Date;
   page?: number;
@@ -79,5 +80,15 @@ export interface RecordStatusChangedPayload {
   source: ModuleName;
   recordId: string;
   status: string;
+  timestamp: Date;
+}
+
+// Fired when a record is actually removed (not just status/assignee
+// changed) — currently only CTI IOC deletion. No status field, unlike
+// RecordStatusChangedPayload: the record no longer exists to have one.
+export interface RecordDeletedPayload {
+  tenantId: string;
+  source: ModuleName;
+  recordId: string;
   timestamp: Date;
 }

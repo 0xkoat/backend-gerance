@@ -113,6 +113,7 @@ export class SiemService implements SecurityModule<
     const {
       tenantId,
       severity,
+      assignedToUserId,
       dateFrom,
       dateTo,
       page = 1,
@@ -124,6 +125,7 @@ export class SiemService implements SecurityModule<
       tenantId,
       ...(severity && { severity }),
       ...(status && { status }),
+      ...(assignedToUserId && { assignedToUserId }),
       ...((dateFrom || dateTo) && {
         createdAt: {
           ...(dateFrom && { gte: dateFrom }),
@@ -195,6 +197,44 @@ export class SiemService implements SecurityModule<
       source: ModuleName.SIEM,
       recordId: updated.id,
       assignedToUserId: assigneeId,
+      status: updated.status,
+      timestamp: new Date(),
+    });
+
+    return updated;
+  }
+
+  // Only the current assignee or an Admin can undo it (assertCanTransitionStatus
+  // covers the same "who" question here as it does for escalate/resolve), and
+  // only while the alert hasn't already moved past ASSIGNED/ESCALATED — an
+  // alert that's already RESOLVED has nothing meaningful left to unassign.
+  async unassignAlert(
+    tenantId: string,
+    id: string,
+    caller: AuthenticatedUser,
+  ): Promise<SiemAlert> {
+    const alert = await this.prisma.siemAlert.findUnique({ where: { id } });
+    if (!alert || alert.tenantId !== tenantId) {
+      throw new NotFoundException('Alert not found');
+    }
+
+    assertCanTransitionStatus(caller, alert.assignedToUserId);
+
+    if (!TRANSITIONABLE_STATUSES.includes(alert.status)) {
+      throw new ConflictException(
+        'Alert must be currently assigned and not yet resolved to be unassigned',
+      );
+    }
+
+    const updated = await this.prisma.siemAlert.update({
+      where: { id },
+      data: { assignedToUserId: null, status: SiemAlertStatus.OPEN },
+    });
+
+    this.eventEmitter.emit('siem.alert.unassigned', {
+      tenantId,
+      source: ModuleName.SIEM,
+      recordId: updated.id,
       status: updated.status,
       timestamp: new Date(),
     });

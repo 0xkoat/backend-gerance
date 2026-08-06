@@ -84,6 +84,8 @@ describe('SoarController (e2e)', () => {
   const mockSoarService = {
     listPlaybooks: jest.fn(),
     createPlaybook: jest.fn(),
+    updatePlaybook: jest.fn(),
+    deletePlaybook: jest.fn(),
     query: jest.fn(),
   };
 
@@ -118,7 +120,9 @@ describe('SoarController (e2e)', () => {
       .useValue({
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
-        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
+        refreshToken: {
+          create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+        },
       })
       .compile();
 
@@ -202,6 +206,82 @@ describe('SoarController (e2e)', () => {
         .send({ name: 'Incomplete' })
         .expect(400);
       expect(mockSoarService.createPlaybook).not.toHaveBeenCalled();
+    });
+
+    it("rejects a triggerCondition that evaluateTriggers could never match (typo'd key)", async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .post('/api/soar/playbooks')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          name: 'Broken playbook',
+          triggerCondition: { severty: 'CRITICAL' },
+          actions: { isolateHost: true },
+        })
+        .expect(400);
+      expect(mockSoarService.createPlaybook).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('PATCH /soar/playbooks/:id', () => {
+    it('allows an Admin to deactivate a playbook', async () => {
+      const token = await loginAs(adminUser.email);
+      mockSoarService.updatePlaybook.mockResolvedValue({
+        id: 'playbook-1',
+        tenantId: 'tenant-1',
+        isActive: false,
+      });
+
+      await request(app.getHttpServer())
+        .patch('/api/soar/playbooks/playbook-1')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ isActive: false })
+        .expect(200);
+
+      expect(mockSoarService.updatePlaybook).toHaveBeenCalledWith(
+        'tenant-1',
+        'playbook-1',
+        { isActive: false },
+      );
+    });
+
+    it('rejects an Analyst (playbook management is Admin-only)', async () => {
+      const token = await loginAs(analystUser.email);
+
+      await request(app.getHttpServer())
+        .patch('/api/soar/playbooks/playbook-1')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ isActive: false })
+        .expect(403);
+      expect(mockSoarService.updatePlaybook).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('DELETE /soar/playbooks/:id', () => {
+    it('allows an Admin to delete a playbook', async () => {
+      const token = await loginAs(adminUser.email);
+      mockSoarService.deletePlaybook.mockResolvedValue(undefined);
+
+      await request(app.getHttpServer())
+        .delete('/api/soar/playbooks/playbook-1')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(mockSoarService.deletePlaybook).toHaveBeenCalledWith(
+        'tenant-1',
+        'playbook-1',
+      );
+    });
+
+    it('rejects an Analyst (playbook management is Admin-only)', async () => {
+      const token = await loginAs(analystUser.email);
+
+      await request(app.getHttpServer())
+        .delete('/api/soar/playbooks/playbook-1')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      expect(mockSoarService.deletePlaybook).not.toHaveBeenCalled();
     });
   });
 
@@ -337,29 +417,27 @@ describe('EDR -> SIEM -> CTI -> SOAR integration (e2e, real event chain)', () =>
               ) ?? null,
             ),
         ),
-      findUnique: jest
-        .fn()
-        .mockImplementation(
-          ({
-            where,
-          }: {
-            where: {
-              tenantId_type_value: {
-                tenantId: string;
-                type: string;
-                value: string;
-              };
+      findUnique: jest.fn().mockImplementation(
+        ({
+          where,
+        }: {
+          where: {
+            tenantId_type_value: {
+              tenantId: string;
+              type: string;
+              value: string;
             };
-          }) =>
-            Promise.resolve(
-              ctiIocs.find(
-                (i) =>
-                  i.tenantId === where.tenantId_type_value.tenantId &&
-                  i.type === where.tenantId_type_value.type &&
-                  i.value === where.tenantId_type_value.value,
-              ) ?? null,
-            ),
-        ),
+          };
+        }) =>
+          Promise.resolve(
+            ctiIocs.find(
+              (i) =>
+                i.tenantId === where.tenantId_type_value.tenantId &&
+                i.type === where.tenantId_type_value.type &&
+                i.value === where.tenantId_type_value.value,
+            ) ?? null,
+          ),
+      ),
     },
     soarPlaybook: {
       create: jest
@@ -458,7 +536,9 @@ describe('EDR -> SIEM -> CTI -> SOAR integration (e2e, real event chain)', () =>
         ...statefulPrisma,
         onModuleInit: jest.fn(),
         onModuleDestroy: jest.fn(),
-        refreshToken: { create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }) },
+        refreshToken: {
+          create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+        },
       })
       .compile();
 

@@ -18,9 +18,12 @@ import { AssignDto } from '../common/dto/assign.dto';
 const mockVmService = {
   listAssets: jest.fn(),
   createAsset: jest.fn(),
+  updateAsset: jest.fn(),
+  deleteAsset: jest.fn(),
   query: jest.fn(),
   updateVulnerabilityStatus: jest.fn(),
   assignVulnerability: jest.fn(),
+  unassignVulnerability: jest.fn(),
   ingest: jest.fn(),
 };
 
@@ -97,6 +100,51 @@ describe('VmController', () => {
         ForbiddenException,
       );
       expect(mockVmService.createAsset).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('updateAsset', () => {
+    it('passes the tenant and id to the service', async () => {
+      const updated = { id: 'asset-1', tenantId: 'tenant-1' };
+      mockVmService.updateAsset.mockResolvedValue(updated);
+
+      const result = await controller.updateAsset(analyst, 'asset-1', {
+        name: 'renamed',
+      });
+
+      expect(result).toEqual(updated);
+      expect(mockVmService.updateAsset).toHaveBeenCalledWith(
+        'tenant-1',
+        'asset-1',
+        { name: 'renamed' },
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      await expect(
+        controller.updateAsset(noTenantAdmin, 'asset-1', {}),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockVmService.updateAsset).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteAsset', () => {
+    it('passes the tenant and id to the service', async () => {
+      mockVmService.deleteAsset.mockResolvedValue(undefined);
+
+      await controller.deleteAsset(analyst, 'asset-1');
+
+      expect(mockVmService.deleteAsset).toHaveBeenCalledWith(
+        'tenant-1',
+        'asset-1',
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      await expect(
+        controller.deleteAsset(noTenantAdmin, 'asset-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockVmService.deleteAsset).not.toHaveBeenCalled();
     });
   });
 
@@ -183,6 +231,29 @@ describe('VmController', () => {
         controller.assignVulnerability(noTenantAdmin, 'vuln-1', dto),
       ).rejects.toThrow(ForbiddenException);
       expect(mockVmService.assignVulnerability).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('unassignVulnerability', () => {
+    it('passes the caller to the service', async () => {
+      const updated = { id: 'vuln-1', assignedToUserId: null };
+      mockVmService.unassignVulnerability.mockResolvedValue(updated);
+
+      const result = await controller.unassignVulnerability(analyst, 'vuln-1');
+
+      expect(result).toEqual(updated);
+      expect(mockVmService.unassignVulnerability).toHaveBeenCalledWith(
+        'tenant-1',
+        'vuln-1',
+        analyst,
+      );
+    });
+
+    it('throws ForbiddenException when the caller has no tenant', async () => {
+      await expect(
+        controller.unassignVulnerability(noTenantAdmin, 'vuln-1'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockVmService.unassignVulnerability).not.toHaveBeenCalled();
     });
   });
 

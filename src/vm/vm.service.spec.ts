@@ -1,5 +1,10 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { ForbiddenException, Logger, NotFoundException } from '@nestjs/common';
+import {
+  ConflictException,
+  ForbiddenException,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { VmService, VmQueryFilters } from './vm.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -17,6 +22,9 @@ const mockPrismaService = {
     upsert: jest.fn(),
     findMany: jest.fn(),
     create: jest.fn(),
+    findUnique: jest.fn(),
+    update: jest.fn(),
+    delete: jest.fn(),
   },
   vmVulnerability: {
     create: jest.fn(),
@@ -24,6 +32,7 @@ const mockPrismaService = {
     findFirst: jest.fn(),
     findUnique: jest.fn(),
     update: jest.fn(),
+    count: jest.fn(),
   },
   user: {
     findFirst: jest.fn(),
@@ -182,6 +191,21 @@ describe('VmService', () => {
       );
     });
 
+    it('filters by assignedToUserId when provided', async () => {
+      mockPrismaService.vmVulnerability.findMany.mockResolvedValue([]);
+
+      await service.query({
+        tenantId: 'tenant-1',
+        assignedToUserId: 'analyst-1',
+      });
+
+      expect(mockPrismaService.vmVulnerability.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { tenantId: 'tenant-1', assignedToUserId: 'analyst-1' },
+        }),
+      );
+    });
+
     it('builds a createdAt range when dateFrom/dateTo are provided', async () => {
       const dateFrom = new Date('2026-01-01');
       const dateTo = new Date('2026-01-31');
@@ -280,6 +304,82 @@ describe('VmService', () => {
       expect(mockPrismaService.vmAsset.create).toHaveBeenCalledWith({
         data: { tenantId: 'tenant-1', ...dto },
       });
+    });
+  });
+
+  describe('updateAsset', () => {
+    it('updates an asset scoped to the tenant', async () => {
+      const existing = { id: 'asset-1', tenantId: 'tenant-1' };
+      const updated = { ...existing, name: 'renamed-asset' };
+      mockPrismaService.vmAsset.findUnique.mockResolvedValue(existing);
+      mockPrismaService.vmAsset.update.mockResolvedValue(updated);
+
+      const result = await service.updateAsset('tenant-1', 'asset-1', {
+        name: 'renamed-asset',
+      });
+
+      expect(result).toEqual(updated);
+      expect(mockPrismaService.vmAsset.update).toHaveBeenCalledWith({
+        where: { id: 'asset-1' },
+        data: { name: 'renamed-asset' },
+      });
+    });
+
+    it('throws when the asset belongs to another tenant', async () => {
+      mockPrismaService.vmAsset.findUnique.mockResolvedValue({
+        id: 'asset-1',
+        tenantId: 'tenant-2',
+      });
+
+      await expect(
+        service.updateAsset('tenant-1', 'asset-1', { name: 'x' }),
+      ).rejects.toThrow('Asset not found');
+      expect(mockPrismaService.vmAsset.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('deleteAsset', () => {
+    it('deletes an asset scoped to the tenant when it has no vulnerabilities', async () => {
+      mockPrismaService.vmAsset.findUnique.mockResolvedValue({
+        id: 'asset-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.vmVulnerability.count.mockResolvedValue(0);
+      mockPrismaService.vmAsset.delete.mockResolvedValue({ id: 'asset-1' });
+
+      await service.deleteAsset('tenant-1', 'asset-1');
+
+      expect(mockPrismaService.vmVulnerability.count).toHaveBeenCalledWith({
+        where: { assetId: 'asset-1' },
+      });
+      expect(mockPrismaService.vmAsset.delete).toHaveBeenCalledWith({
+        where: { id: 'asset-1' },
+      });
+    });
+
+    it('throws ConflictException when vulnerabilities exist', async () => {
+      mockPrismaService.vmAsset.findUnique.mockResolvedValue({
+        id: 'asset-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.vmVulnerability.count.mockResolvedValue(2);
+
+      await expect(service.deleteAsset('tenant-1', 'asset-1')).rejects.toThrow(
+        ConflictException,
+      );
+      expect(mockPrismaService.vmAsset.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws when the asset belongs to another tenant', async () => {
+      mockPrismaService.vmAsset.findUnique.mockResolvedValue({
+        id: 'asset-1',
+        tenantId: 'tenant-2',
+      });
+
+      await expect(service.deleteAsset('tenant-1', 'asset-1')).rejects.toThrow(
+        'Asset not found',
+      );
+      expect(mockPrismaService.vmAsset.delete).not.toHaveBeenCalled();
     });
   });
 
@@ -435,6 +535,93 @@ describe('VmService', () => {
 
       await expect(
         service.assignVulnerability('tenant-1', 'vuln-1', caller, 'analyst-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('unassignVulnerability', () => {
+    const assigned = {
+      id: 'vuln-1',
+      tenantId: 'tenant-1',
+      status: VmVulnerabilitiesStatus.OPEN,
+      assignedToUserId: 'analyst-1',
+    };
+
+    it('lets the assignee unassign, without touching the remediation status', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-1' });
+      mockPrismaService.vmVulnerability.findUnique.mockResolvedValue(assigned);
+      mockPrismaService.vmVulnerability.update.mockResolvedValue({
+        ...assigned,
+        assignedToUserId: null,
+      });
+
+      const result = await service.unassignVulnerability(
+        'tenant-1',
+        'vuln-1',
+        caller,
+      );
+
+      expect(result.assignedToUserId).toBeNull();
+      expect(mockPrismaService.vmVulnerability.update).toHaveBeenCalledWith({
+        where: { id: 'vuln-1' },
+        data: { assignedToUserId: null },
+      });
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+        'vm.vulnerability.unassigned',
+        expect.objectContaining({
+          tenantId: 'tenant-1',
+          source: ModuleName.VM,
+          recordId: 'vuln-1',
+          status: VmVulnerabilitiesStatus.OPEN,
+        }),
+      );
+    });
+
+    it('lets an Admin unassign a vulnerability assigned to someone else', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.vmVulnerability.findUnique.mockResolvedValue(assigned);
+      mockPrismaService.vmVulnerability.update.mockResolvedValue({
+        ...assigned,
+        assignedToUserId: null,
+      });
+
+      await service.unassignVulnerability('tenant-1', 'vuln-1', caller);
+
+      expect(mockPrismaService.vmVulnerability.update).toHaveBeenCalledWith({
+        where: { id: 'vuln-1' },
+        data: { assignedToUserId: null },
+      });
+    });
+
+    it('rejects an Analyst who is not the assignee', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-2' });
+      mockPrismaService.vmVulnerability.findUnique.mockResolvedValue(assigned);
+
+      await expect(
+        service.unassignVulnerability('tenant-1', 'vuln-1', caller),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrismaService.vmVulnerability.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects unassigning a vulnerability that was never assigned', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.vmVulnerability.findUnique.mockResolvedValue({
+        ...assigned,
+        assignedToUserId: null,
+      });
+
+      await expect(
+        service.unassignVulnerability('tenant-1', 'vuln-1', caller),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.vmVulnerability.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the vulnerability does not exist', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.vmVulnerability.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.unassignVulnerability('tenant-1', 'missing-id', caller),
       ).rejects.toThrow(NotFoundException);
     });
   });

@@ -44,7 +44,11 @@ describe('AssetController', () => {
 
   describe('getUnifiedFeed', () => {
     it('merges the query params with the caller tenantId', async () => {
-      const query: BaseQueryDto = { severity: Severity.HIGH, page: 1, pageSize: 20 };
+      const query: BaseQueryDto = {
+        severity: Severity.HIGH,
+        page: 1,
+        pageSize: 20,
+      };
       mockAssetService.getUnifiedFeed.mockResolvedValue([]);
 
       await controller.getUnifiedFeed(viewer, query);

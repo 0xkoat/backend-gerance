@@ -5,10 +5,12 @@ import {
   Body,
   Param,
   Patch,
+  Delete,
   Query,
 } from '@nestjs/common';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CreateVmAssetDto } from './dto/createVmAsset.dto';
+import { UpdateVmAssetDto } from './dto/updateVmAsset.dto';
 import { UpdateVulnerabilityStatusDto } from './dto/updateVulnerabilityStatus.dto';
 import { IngestVmEventDto } from './dto/ingestVmEvent.dto';
 import { VmQueryDto } from './dto/vmQuery.dto';
@@ -38,6 +40,27 @@ export class VmController {
   ) {
     const tenantId = requireTenantId(user);
     return this.vmService.createAsset(tenantId, createVmAssetDto);
+  }
+
+  @Patch('assets/:id')
+  @Roles(UserRole.ADMIN, UserRole.ANALYST)
+  async updateAsset(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() updateVmAssetDto: UpdateVmAssetDto,
+  ) {
+    const tenantId = requireTenantId(user);
+    return this.vmService.updateAsset(tenantId, id, updateVmAssetDto);
+  }
+
+  @Delete('assets/:id')
+  @Roles(UserRole.ADMIN, UserRole.ANALYST)
+  async deleteAsset(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    const tenantId = requireTenantId(user);
+    await this.vmService.deleteAsset(tenantId, id);
   }
 
   @Get('vulnerabilities')
@@ -78,6 +101,16 @@ export class VmController {
       user,
       assignDto.assignedToUserId,
     );
+  }
+
+  @Delete('vulnerabilities/:id/assign')
+  @Roles(UserRole.ADMIN, UserRole.ANALYST)
+  async unassignVulnerability(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    const tenantId = requireTenantId(user);
+    return this.vmService.unassignVulnerability(tenantId, id, user);
   }
 
   @Post('events')

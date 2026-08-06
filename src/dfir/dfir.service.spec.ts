@@ -31,6 +31,8 @@ const mockPrismaService = {
   },
   dfirLink: {
     create: jest.fn(),
+    findUnique: jest.fn(),
+    delete: jest.fn(),
   },
   siemAlert: {
     findUnique: jest.fn(),
@@ -219,6 +221,95 @@ describe('DfirService', () => {
     });
   });
 
+  describe('unlinkRecord', () => {
+    it('deletes a link scoped to the incident and tenant', async () => {
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
+        id: 'incident-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.dfirLink.findUnique.mockResolvedValue({
+        id: 'link-1',
+        tenantId: 'tenant-1',
+        incidentId: 'incident-1',
+      });
+      mockPrismaService.dfirLink.delete.mockResolvedValue({ id: 'link-1' });
+
+      await service.unlinkRecord('tenant-1', 'incident-1', 'link-1');
+
+      expect(mockPrismaService.dfirLink.delete).toHaveBeenCalledWith({
+        where: { id: 'link-1' },
+      });
+    });
+
+    it('throws NotFoundException when the incident does not exist', async () => {
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.unlinkRecord('tenant-1', 'missing-id', 'link-1'),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.dfirLink.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the incident belongs to a different tenant', async () => {
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
+        id: 'incident-1',
+        tenantId: 'tenant-2',
+      });
+
+      await expect(
+        service.unlinkRecord('tenant-1', 'incident-1', 'link-1'),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.dfirLink.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the link does not exist', async () => {
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
+        id: 'incident-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.dfirLink.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.unlinkRecord('tenant-1', 'incident-1', 'missing-link'),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.dfirLink.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the link belongs to a different incident', async () => {
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
+        id: 'incident-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.dfirLink.findUnique.mockResolvedValue({
+        id: 'link-1',
+        tenantId: 'tenant-1',
+        incidentId: 'incident-2',
+      });
+
+      await expect(
+        service.unlinkRecord('tenant-1', 'incident-1', 'link-1'),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.dfirLink.delete).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the link belongs to a different tenant', async () => {
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
+        id: 'incident-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.dfirLink.findUnique.mockResolvedValue({
+        id: 'link-1',
+        tenantId: 'tenant-2',
+        incidentId: 'incident-1',
+      });
+
+      await expect(
+        service.unlinkRecord('tenant-1', 'incident-1', 'link-1'),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.dfirLink.delete).not.toHaveBeenCalled();
+    });
+  });
+
   describe('ingest', () => {
     it('creates an incident from a raw event, using the data title', async () => {
       const event: UnifiedEvent = {
@@ -353,6 +444,21 @@ describe('DfirService', () => {
             severity: Severity.CRITICAL,
             status: DfirIncidentStatus.INVESTIGATING,
           },
+        }),
+      );
+    });
+
+    it('filters by assignedToUserId when provided', async () => {
+      mockPrismaService.dfirIncident.findMany.mockResolvedValue([]);
+
+      await service.query({
+        tenantId: 'tenant-1',
+        assignedToUserId: 'analyst-1',
+      });
+
+      expect(mockPrismaService.dfirIncident.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { tenantId: 'tenant-1', assignedToUserId: 'analyst-1' },
         }),
       );
     });
@@ -491,6 +597,79 @@ describe('DfirService', () => {
 
       await expect(
         service.assignIncident('tenant-1', 'missing-id', caller, 'analyst-1'),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('unassignIncident', () => {
+    const assigned = {
+      id: 'incident-1',
+      tenantId: 'tenant-1',
+      status: DfirIncidentStatus.INVESTIGATING,
+      assignedToUserId: 'analyst-1',
+    };
+
+    it('lets the assignee unassign, reverting status to OPEN', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-1' });
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue(assigned);
+      mockPrismaService.dfirIncident.update.mockResolvedValue({
+        ...assigned,
+        assignedToUserId: null,
+        status: DfirIncidentStatus.OPEN,
+      });
+
+      const result = await service.unassignIncident(
+        'tenant-1',
+        'incident-1',
+        caller,
+      );
+
+      expect(result.status).toBe(DfirIncidentStatus.OPEN);
+      expect(mockPrismaService.dfirIncident.update).toHaveBeenCalledWith({
+        where: { id: 'incident-1' },
+        data: { assignedToUserId: null, status: DfirIncidentStatus.OPEN },
+      });
+      expect(mockEventEmitter.emit).toHaveBeenCalledWith(
+        'dfir.incident.unassigned',
+        expect.objectContaining({
+          tenantId: 'tenant-1',
+          source: ModuleName.DFIR,
+          recordId: 'incident-1',
+          status: DfirIncidentStatus.OPEN,
+        }),
+      );
+    });
+
+    it('rejects an Analyst who is not the assignee', async () => {
+      const caller = authUser({ role: UserRole.ANALYST, userId: 'analyst-2' });
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue(assigned);
+
+      await expect(
+        service.unassignIncident('tenant-1', 'incident-1', caller),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockPrismaService.dfirIncident.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects unassigning an incident that was never assigned', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
+        ...assigned,
+        status: DfirIncidentStatus.OPEN,
+        assignedToUserId: null,
+      });
+
+      await expect(
+        service.unassignIncident('tenant-1', 'incident-1', caller),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.dfirIncident.update).not.toHaveBeenCalled();
+    });
+
+    it('throws NotFoundException when the incident does not exist', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.unassignIncident('tenant-1', 'missing-id', caller),
       ).rejects.toThrow(NotFoundException);
     });
   });

@@ -1,10 +1,20 @@
-import { Controller, Get, Post, Body, Query } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Body,
+  Param,
+  Query,
+} from '@nestjs/common';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthenticatedUser } from '../auth/jwt.strategy';
 import { UserRole, ModuleName, Severity } from '../generated/prisma/enums';
 import { CtiService } from './cti.service';
 import { CreateCtiIocDto } from './dto/createCtiIoc.dto';
+import { UpdateCtiIocDto } from './dto/updateCtiIoc.dto';
 import { CtiQueryDto } from './dto/ctiQuery.dto';
 import type { UnifiedEvent } from '../common/security-module/types';
 import { requireTenantId } from '../common/require-tenant-id';
@@ -48,6 +58,27 @@ export class CtiController {
     return this.ctiService.ingest(
       this.buildIocEvent(tenantId, createCtiIocDto),
     );
+  }
+
+  @Patch('iocs/:id')
+  @Roles(UserRole.ADMIN, UserRole.ANALYST)
+  async updateIoc(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+    @Body() updateCtiIocDto: UpdateCtiIocDto,
+  ) {
+    const tenantId = requireTenantId(user);
+    return this.ctiService.updateIoc(tenantId, id, updateCtiIocDto);
+  }
+
+  @Delete('iocs/:id')
+  @Roles(UserRole.ADMIN, UserRole.ANALYST)
+  async deleteIoc(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id') id: string,
+  ) {
+    const tenantId = requireTenantId(user);
+    await this.ctiService.deleteIoc(tenantId, id);
   }
 
   @Post('events')
