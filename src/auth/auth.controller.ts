@@ -28,6 +28,9 @@ const REFRESH_TOKEN_COOKIE_PATH = '/api/auth';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
+  // access_token comes back in the JSON body; the refresh token never does,
+  // it's set only as the httpOnly cookie below, so it's inaccessible to
+  // frontend JS (mitigates XSS-driven token theft).
   @Public()
   @Post('login')
   @HttpCode(HttpStatus.OK)
@@ -73,6 +76,9 @@ export class AuthController {
     return { message: 'Logged out' };
   }
 
+  // Response body is identical whether or not the email matches a real
+  // account, same no-enumeration principle as the dummy-hash login timing
+  // fix; a distinct "no such account" message would leak which emails exist.
   @Public()
   @Post('forgot-password')
   @HttpCode(HttpStatus.OK)

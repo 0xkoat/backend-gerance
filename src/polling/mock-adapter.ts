@@ -7,9 +7,9 @@ import {
 } from '../common/security-module/types';
 
 // Stands in for every real per-vendor adapter until real module API
-// documentation exists (root CLAUDE.md's "open input required" note) — one
-// canned record per module, so PollingService's cron path is real and
-// testable without any actual vendor access. Ignores config/since entirely
+// documentation/test access exists for each vendor. One canned record per
+// module, so PollingService's cron path is real and testable without any
+// actual vendor access. Ignores config/since entirely
 // (they're only meaningful once a real vendor is behind this).
 @Injectable()
 export class MockAdapter implements ModuleDataSourceAdapter {

@@ -25,6 +25,12 @@ export class CtiService implements SecurityModule<CtiIoc, CtiQueryFilters> {
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
+  // SecurityModule.ingest() implementation, shared by POST /cti/iocs and
+  // POST /cti/events. Upserts on the (tenantId, type, value) identity key so
+  // a re-submitted IOC refreshes confidence/source instead of duplicating.
+  // The pre-upsert findUnique exists solely to tell a genuine create from a
+  // refresh, so 'cti.ioc.created' fires once per real new IOC, not on every
+  // re-ingestion.
   async ingest(event: UnifiedEvent): Promise<void> {
     const data = event.data as {
       type: CtiIocType;
@@ -101,6 +107,10 @@ export class CtiService implements SecurityModule<CtiIoc, CtiQueryFilters> {
     });
   }
 
+  // Third hop of the EDR -> SIEM -> CTI -> SOAR -> DFIR chain: every new
+  // SIEM alert is checked against known IOCs by IP; a match escalates the
+  // alert to CRITICAL via 'cti.enrichment.applied' rather than CtiService
+  // touching SiemAlert directly, keeping the two modules decoupled.
   @OnEvent('siem.alert.created')
   async handleSiemAlert(event: UnifiedEvent): Promise<void> {
     const data = event.data as { ip?: string; alertId: string };

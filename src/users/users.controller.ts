@@ -47,6 +47,12 @@ export class UsersController {
     return safeUser;
   }
 
+  // @SkipPasswordCheck() because this route is precisely how a still-forced
+  // account escapes the MustChangePasswordGuard, otherwise the guard would
+  // block the very route meant to satisfy it. Re-signs a fresh access token
+  // immediately, since the old one still carries the stale mustChangePassword:
+  // true claim and would keep tripping the guard on every subsequent request
+  // until it naturally expired.
   @SkipPasswordCheck()
   @Patch('me/password')
   async changeMyPassword(
@@ -112,6 +118,11 @@ export class UsersController {
     return { hasPending };
   }
 
+  // tenantId comes from the caller's own token, never the request body. An
+  // Admin can only ever create users inside their own tenant. role does come
+  // from the body here, but CreateSubordinateUserDto only allows
+  // ADMIN/ANALYST/VIEWER, matching the "Admin can create co-Admin, Analyst,
+  // or Viewer" provisioning rule.
   @Roles(UserRole.ADMIN)
   @Post()
   async createUser(

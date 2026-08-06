@@ -28,6 +28,10 @@ export interface EdrQueryFilters extends BaseQueryFilters {
   endpointId?: string;
 }
 
+// The only statuses a detection can move out of via updateDetectionStatus/
+// unassignDetection. OPEN (never assigned yet) and terminal states aren't
+// in this list, so a detection must be assigned before it can be
+// escalated/resolved, and can't be unassigned once already resolved.
 const TRANSITIONABLE_STATUSES: EdrDetectionStatus[] = [
   EdrDetectionStatus.ASSIGNED,
   EdrDetectionStatus.ESCALATED,
@@ -45,6 +49,12 @@ export class EdrService implements SecurityModule<
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
+  // SecurityModule.ingest() implementation and the start of the documented
+  // EDR -> SIEM -> CTI -> SOAR -> DFIR orchestration chain: upserts the
+  // reporting endpoint by (tenantId, hostname), creates the detection, then
+  // emits 'edr.detection.created'. SiemService listens for this to turn it
+  // into a SiemAlert. detectionId is stamped into the emitted event's data
+  // so downstream listeners (and AssetService) can reference the created row.
   async ingest(event: UnifiedEvent): Promise<void> {
     const data = event.data as {
       hostname: string;

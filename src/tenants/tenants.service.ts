@@ -16,6 +16,10 @@ export class TenantsService {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  // The only path that creates a Tenant and its first Admin, Super Admin
+  // only (enforced at the controller). Both rows are created inside one
+  // transaction so a duplicate-email failure never leaves an orphaned
+  // Tenant with no Admin able to log into it.
   async createTenantWithAdmin(createTenantDto: CreateTenantDto) {
     const { tenantName, name, email, password, phoneNumber } = createTenantDto;
     const hashedPassword = await argon2.hash(password);

@@ -50,6 +50,11 @@ export class SiemService implements SecurityModule<
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
+  // SecurityModule.ingest() implementation. Every incoming event always
+  // becomes a SiemLog (the raw record); it's promoted to a SiemAlert too
+  // only when it's explicitly typed 'alert' or its severity already crosses
+  // the HIGH/CRITICAL threshold, a deliberately simple, explicit rule meant
+  // to be revisited later, not a tuned heuristic.
   async ingest(event: UnifiedEvent): Promise<void> {
     const data = event.data as { title?: string };
 
@@ -86,6 +91,11 @@ export class SiemService implements SecurityModule<
     });
   }
 
+  // Second hop of the EDR -> SIEM -> CTI -> SOAR -> DFIR chain: every EDR
+  // detection is re-ingested here as an explicit SIEM 'alert' (bypassing the
+  // severity threshold in ingest() above), which is what turns EDR
+  // telemetry into a SiemAlert unconditionally rather than only on
+  // high-severity detections.
   @OnEvent('edr.detection.created')
   async handleEdrDetection(event: UnifiedEvent): Promise<void> {
     const data = event.data as { hostname: string; detectionName: string };
@@ -101,6 +111,11 @@ export class SiemService implements SecurityModule<
     });
   }
 
+  // CTI never calls SiemService directly. Cross-module reactions stay
+  // decoupled by going through the event emitter only, never a direct
+  // service-to-service call. This is the listener side of that: CtiService
+  // emits the escalated severity, this applies it to the alert it matched
+  // against.
   @OnEvent('cti.enrichment.applied')
   async handleEnrichment(payload: CtiEnrichmentPayload): Promise<void> {
     await this.prisma.siemAlert.updateMany({

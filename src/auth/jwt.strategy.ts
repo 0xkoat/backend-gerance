@@ -31,6 +31,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
+  // Passport calls this after verifying the JWT's signature/expiry; whatever
+  // it returns becomes request.user for the rest of the request (consumed by
+  // RolesGuard, MustChangePasswordGuard, and every controller's @CurrentUser
+  // decorator). Trusts the token's claims as-is, no DB lookup here, so a
+  // role/tenantId change on the user's row doesn't take effect until their
+  // access token expires (up to 15 minutes, per the short-lived-token design).
   async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
     return {
       userId: payload.sub,

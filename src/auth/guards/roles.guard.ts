@@ -8,6 +8,10 @@ import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { UserRole } from '../../generated/prisma/enums';
 
+// Second of the three global guards, runs after JwtAuthGuard, so
+// context.user is already populated for any non-public route by the time
+// this checks @Roles(). A route with no @Roles() decorator at all (handler
+// or controller level) is open to any authenticated role.
 @Injectable()
 export class RolesGuard implements CanActivate {
   constructor(private reflector: Reflector) {}
