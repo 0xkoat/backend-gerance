@@ -45,6 +45,12 @@ describe('AuthService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    // Default so registerFailedLogin's atomic-increment read-back has
+    // something to destructure; tests that care about the actual count
+    // override this with their own mockResolvedValueOnce.
+    mockPrismaService.user.update.mockResolvedValue({
+      failedLoginAttempts: 1,
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -145,20 +151,25 @@ describe('AuthService', () => {
     });
 
     describe('account lockout', () => {
-      it('increments failedLoginAttempts on a wrong password, without locking below the threshold', async () => {
+      it('increments failedLoginAttempts atomically on a wrong password, without locking below the threshold', async () => {
         mockUsersService.findByEmail.mockResolvedValue({
           ...dbUser,
           failedLoginAttempts: 2,
         });
         (argon2.verify as jest.Mock).mockResolvedValue(false);
+        mockPrismaService.user.update.mockResolvedValueOnce({
+          failedLoginAttempts: 3,
+        });
 
         await expect(
           service.validateUser('bob@x.com', 'wrong-password'),
         ).rejects.toThrow(UnauthorizedException);
 
+        expect(mockPrismaService.user.update).toHaveBeenCalledTimes(1);
         expect(mockPrismaService.user.update).toHaveBeenCalledWith({
           where: { id: '1' },
-          data: { failedLoginAttempts: 3, lockedUntil: null },
+          data: { failedLoginAttempts: { increment: 1 } },
+          select: { failedLoginAttempts: true },
         });
       });
 
@@ -168,14 +179,23 @@ describe('AuthService', () => {
           failedLoginAttempts: 4,
         });
         (argon2.verify as jest.Mock).mockResolvedValue(false);
+        mockPrismaService.user.update.mockResolvedValueOnce({
+          failedLoginAttempts: 5,
+        });
 
         await expect(
           service.validateUser('bob@x.com', 'wrong-password'),
         ).rejects.toThrow(UnauthorizedException);
 
-        expect(mockPrismaService.user.update).toHaveBeenCalledWith({
+        expect(mockPrismaService.user.update).toHaveBeenCalledTimes(2);
+        expect(mockPrismaService.user.update).toHaveBeenNthCalledWith(1, {
           where: { id: '1' },
-          data: { failedLoginAttempts: 5, lockedUntil: expect.any(Date) },
+          data: { failedLoginAttempts: { increment: 1 } },
+          select: { failedLoginAttempts: true },
+        });
+        expect(mockPrismaService.user.update).toHaveBeenNthCalledWith(2, {
+          where: { id: '1' },
+          data: { lockedUntil: expect.any(Date) },
         });
       });
 
@@ -400,6 +420,9 @@ describe('AuthService', () => {
       });
       mockPrismaService.user.findUnique.mockResolvedValue(dbUser);
       mockPrismaService.refreshToken.create.mockResolvedValue({ id: 'rt-2' });
+      mockPrismaService.refreshToken.updateMany.mockResolvedValue({
+        count: 1,
+      });
       mockJwtService.sign.mockReturnValue('new-jwt');
 
       const result = await service.refresh('raw');
@@ -412,8 +435,8 @@ describe('AuthService', () => {
           expiresAt: expect.any(Date),
         }),
       });
-      expect(mockPrismaService.refreshToken.update).toHaveBeenCalledWith({
-        where: { id: 'rt-1' },
+      expect(mockPrismaService.refreshToken.updateMany).toHaveBeenCalledWith({
+        where: { id: 'rt-1', revokedAt: null },
         data: { revokedAt: expect.any(Date), replacedByTokenId: 'rt-2' },
       });
       expect(result).toEqual({
@@ -438,11 +461,40 @@ describe('AuthService', () => {
         mustChangePassword: true,
       });
       mockPrismaService.refreshToken.create.mockResolvedValue({ id: 'rt-2' });
+      mockPrismaService.refreshToken.updateMany.mockResolvedValue({
+        count: 1,
+      });
       mockJwtService.sign.mockReturnValue('new-jwt');
 
       const result = await service.refresh('raw');
 
       expect(result.mustChangePassword).toBe(true);
+    });
+
+    it('kills the family and rejects when another concurrent request already revoked this token (lost the race)', async () => {
+      mockPrismaService.refreshToken.findUnique.mockResolvedValue({
+        id: 'rt-1',
+        userId,
+        familyId,
+        tokenHash: hashOf('raw'),
+        revokedAt: null,
+        expiresAt: new Date(Date.now() + 1000),
+      });
+      mockPrismaService.user.findUnique.mockResolvedValue(dbUser);
+      mockPrismaService.refreshToken.create.mockResolvedValue({ id: 'rt-2' });
+      mockPrismaService.refreshToken.updateMany.mockResolvedValue({
+        count: 0,
+      });
+      mockJwtService.sign.mockReturnValue('new-jwt');
+
+      await expect(service.refresh('raw')).rejects.toThrow(
+        UnauthorizedException,
+      );
+
+      expect(mockPrismaService.refreshToken.updateMany).toHaveBeenCalledWith({
+        where: { familyId, revokedAt: null },
+        data: { revokedAt: expect.any(Date) },
+      });
     });
   });
 

@@ -121,6 +121,16 @@ export class DfirService implements SecurityModule<
     // there's no single parent table to check against here.
     await this.assertSourceRecordInTenant(tenantId, sourceType, sourceId);
 
+    // Idempotent on retry (e.g. a client re-POSTing after a timeout on a
+    // request that actually succeeded) rather than creating a second,
+    // indistinguishable link for the same source record.
+    const existingLink = await this.prisma.dfirLink.findFirst({
+      where: { incidentId, sourceType, sourceId },
+    });
+    if (existingLink) {
+      return existingLink;
+    }
+
     return this.prisma.dfirLink.create({
       data: { tenantId, incidentId, sourceType, sourceId },
     });
@@ -312,6 +322,18 @@ export class DfirService implements SecurityModule<
     });
     if (!incident || incident.tenantId !== tenantId) {
       throw new NotFoundException('Incident not found');
+    }
+
+    // Same reasoning as SiemService.assignAlert/EdrService.assignDetection:
+    // assign starts or hands off open work, it shouldn't silently reopen an
+    // incident that's already been contained or resolved.
+    if (
+      incident.status === DfirIncidentStatus.CONTAINED ||
+      incident.status === DfirIncidentStatus.RESOLVED
+    ) {
+      throw new ConflictException(
+        'Incident is already contained or resolved and cannot be reassigned',
+      );
     }
 
     const assigneeId = await resolveAssignee(

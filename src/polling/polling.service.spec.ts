@@ -1,4 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { Logger } from '@nestjs/common';
 import { PollingService } from './polling.service';
 import { MODULE_DATA_SOURCE_ADAPTER } from '../common/security-module/data-source-adapter.interface';
 import { PrismaService } from '../prisma/prisma.service';
@@ -215,6 +216,41 @@ describe('PollingService', () => {
       });
       expect(mockAdapter.fetchSince).toHaveBeenCalledTimes(2);
       expect(mockPrismaService.tenantModule.update).toHaveBeenCalledTimes(2);
+    });
+
+    it('logs and continues to the next tenant when one poll throws', async () => {
+      const errorSpy = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation();
+      mockPrismaService.tenantModule.findMany.mockResolvedValue([
+        {
+          id: 'tm-1',
+          tenantId: 'tenant-1',
+          moduleName: ModuleName.EDR,
+          isActive: true,
+          config: null,
+        },
+        {
+          id: 'tm-2',
+          tenantId: 'tenant-2',
+          moduleName: ModuleName.VM,
+          isActive: true,
+          config: null,
+        },
+      ]);
+      mockAdapter.fetchSince
+        .mockRejectedValueOnce(new Error('adapter unreachable'))
+        .mockResolvedValueOnce([]);
+      mockPrismaService.tenantModule.update.mockResolvedValue({});
+
+      await service.pollAll();
+
+      expect(mockAdapter.fetchSince).toHaveBeenCalledTimes(2);
+      expect(errorSpy).toHaveBeenCalledWith(
+        'Polling failed for tenant tenant-1 / EDR',
+        expect.any(Error),
+      );
+      errorSpy.mockRestore();
     });
   });
 });

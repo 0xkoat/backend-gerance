@@ -363,4 +363,5 @@ model AssetFeedEntry {
   createdAt        DateTime   @default(now())
 
   @@index([tenantId, timestamp])
+  @@index([tenantId, source, sourceId])
 }

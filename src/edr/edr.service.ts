@@ -216,6 +216,14 @@ export class EdrService implements SecurityModule<
       throw new NotFoundException('Detection not found');
     }
 
+    // Same reasoning as SiemService.assignAlert: assign starts or hands off
+    // open work, it shouldn't silently reopen an already-resolved detection.
+    if (detection.status === EdrDetectionStatus.RESOLVED) {
+      throw new ConflictException(
+        'Detection is already resolved and cannot be reassigned',
+      );
+    }
+
     const assigneeId = await resolveAssignee(
       this.prisma,
       caller,

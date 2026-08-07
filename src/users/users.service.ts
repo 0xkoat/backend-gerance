@@ -252,7 +252,10 @@ export class UsersService {
   ): Promise<boolean> {
     const firstAdmin = await this.prisma.user.findFirst({
       where: { tenantId, role: UserRole.ADMIN },
-      orderBy: { createdAt: 'asc' },
+      // id as a tiebreaker: two Admins created in the same transaction (e.g.
+      // prisma/seed-modules.ts's createMany) can share an identical createdAt,
+      // which otherwise makes "first Admin" non-deterministic across calls.
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       select: { id: true },
     });
 
@@ -286,7 +289,7 @@ export class UsersService {
 
       const firstAdmin = await this.prisma.user.findFirst({
         where: { tenantId: admin.tenantId, role: UserRole.ADMIN },
-        orderBy: { createdAt: 'asc' },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         select: { id: true },
       });
 

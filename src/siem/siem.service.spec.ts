@@ -424,6 +424,20 @@ describe('SiemService', () => {
         service.assignAlert('tenant-1', 'alert-1', caller, 'analyst-1'),
       ).rejects.toThrow(NotFoundException);
     });
+
+    it('rejects assigning an alert that is already resolved, instead of silently reopening it', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.siemAlert.findUnique.mockResolvedValue({
+        ...existing,
+        status: SiemAlertStatus.RESOLVED,
+        assignedToUserId: 'analyst-1',
+      });
+
+      await expect(
+        service.assignAlert('tenant-1', 'alert-1', caller, 'analyst-2'),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.siemAlert.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('unassignAlert', () => {

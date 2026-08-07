@@ -31,6 +31,7 @@ const mockPrismaService = {
   },
   dfirLink: {
     create: jest.fn(),
+    findFirst: jest.fn(),
     findUnique: jest.fn(),
     delete: jest.fn(),
   },
@@ -215,6 +216,39 @@ describe('DfirService', () => {
           sourceId: 'ioc-1',
         },
       });
+    });
+
+    // Regression test: a client retrying POST .../links (e.g. after a
+    // timeout on a request that actually succeeded) used to create a second,
+    // indistinguishable link for the same source record.
+    it('returns the existing link instead of creating a duplicate when the same source is linked twice', async () => {
+      mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
+        id: 'incident-1',
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.ctiIoc.findUnique.mockResolvedValue({
+        tenantId: 'tenant-1',
+      });
+      mockPrismaService.dfirLink.findFirst.mockResolvedValueOnce({
+        id: 'link-1',
+      });
+
+      const result = await service.linkRecord(
+        'tenant-1',
+        'incident-1',
+        DfirLinkSourceType.CTI_IOC,
+        'ioc-1',
+      );
+
+      expect(result).toEqual({ id: 'link-1' });
+      expect(mockPrismaService.dfirLink.findFirst).toHaveBeenCalledWith({
+        where: {
+          incidentId: 'incident-1',
+          sourceType: DfirLinkSourceType.CTI_IOC,
+          sourceId: 'ioc-1',
+        },
+      });
+      expect(mockPrismaService.dfirLink.create).not.toHaveBeenCalled();
     });
 
     it('throws NotFoundException when the incident does not exist', async () => {
@@ -700,6 +734,23 @@ describe('DfirService', () => {
         service.assignIncident('tenant-1', 'missing-id', caller, 'analyst-1'),
       ).rejects.toThrow(NotFoundException);
     });
+
+    it.each([DfirIncidentStatus.CONTAINED, DfirIncidentStatus.RESOLVED])(
+      'rejects assigning an incident that is already %s, instead of silently reopening it',
+      async (status) => {
+        const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+        mockPrismaService.dfirIncident.findUnique.mockResolvedValue({
+          ...existing,
+          status,
+          assignedToUserId: 'analyst-1',
+        });
+
+        await expect(
+          service.assignIncident('tenant-1', 'incident-1', caller, 'analyst-2'),
+        ).rejects.toThrow(ConflictException);
+        expect(mockPrismaService.dfirIncident.update).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('unassignIncident', () => {

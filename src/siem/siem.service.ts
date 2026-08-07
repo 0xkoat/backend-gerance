@@ -192,6 +192,15 @@ export class SiemService implements SecurityModule<
       throw new NotFoundException('Alert not found');
     }
 
+    // Assign is meant to start or hand off open work, not silently reopen an
+    // alert that's already been resolved — unlike ASSIGNED/ESCALATED, which
+    // are still "in progress" and can legitimately be reassigned.
+    if (alert.status === SiemAlertStatus.RESOLVED) {
+      throw new ConflictException(
+        'Alert is already resolved and cannot be reassigned',
+      );
+    }
+
     const assigneeId = await resolveAssignee(
       this.prisma,
       caller,

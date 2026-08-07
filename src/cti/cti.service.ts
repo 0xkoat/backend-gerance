@@ -28,9 +28,14 @@ export class CtiService implements SecurityModule<CtiIoc, CtiQueryFilters> {
   // SecurityModule.ingest() implementation, shared by POST /cti/iocs and
   // POST /cti/events. Upserts on the (tenantId, type, value) identity key so
   // a re-submitted IOC refreshes confidence/source instead of duplicating.
-  // The pre-upsert findUnique exists solely to tell a genuine create from a
-  // refresh, so 'cti.ioc.created' fires once per real new IOC, not on every
-  // re-ingestion.
+  //
+  // Tries create() first and only falls back to update() on a P2002 conflict
+  // (rather than a pre-upsert findUnique to decide create-vs-update) so the
+  // create-or-update decision is enforced by the DB's own unique constraint,
+  // not a separate read that can go stale under concurrent ingests of the
+  // same IOC — that gap previously let two concurrent requests both see "no
+  // existing row" and both emit 'cti.ioc.created' for what the DB correctly
+  // stored as a single row.
   async ingest(event: UnifiedEvent): Promise<void> {
     const data = event.data as {
       type: CtiIocType;
@@ -47,26 +52,40 @@ export class CtiService implements SecurityModule<CtiIoc, CtiQueryFilters> {
       },
     };
 
-    const existing = await this.prisma.ctiIoc.findUnique({ where });
+    let ioc: CtiIoc;
+    let created: boolean;
+    try {
+      ioc = await this.prisma.ctiIoc.create({
+        data: {
+          tenantId: event.tenantId,
+          type: data.type,
+          value: data.value,
+          confidence: data.confidence,
+          source: data.source,
+          rawData: event.data as Prisma.InputJsonValue,
+        },
+      });
+      created = true;
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        ioc = await this.prisma.ctiIoc.update({
+          where,
+          data: {
+            confidence: data.confidence,
+            source: data.source,
+            rawData: event.data as Prisma.InputJsonValue,
+          },
+        });
+        created = false;
+      } else {
+        throw error;
+      }
+    }
 
-    const ioc = await this.prisma.ctiIoc.upsert({
-      where,
-      update: {
-        confidence: data.confidence,
-        source: data.source,
-        rawData: event.data as Prisma.InputJsonValue,
-      },
-      create: {
-        tenantId: event.tenantId,
-        type: data.type,
-        value: data.value,
-        confidence: data.confidence,
-        source: data.source,
-        rawData: event.data as Prisma.InputJsonValue,
-      },
-    });
-
-    if (!existing) {
+    if (created) {
       this.eventEmitter.emit('cti.ioc.created', {
         ...event,
         data: { ...event.data, iocId: ioc.id },
@@ -74,8 +93,12 @@ export class CtiService implements SecurityModule<CtiIoc, CtiQueryFilters> {
     }
   }
 
-  async checkMatch(tenantId: string, value: string): Promise<CtiIoc | null> {
-    return this.prisma.ctiIoc.findFirst({ where: { tenantId, value } });
+  async checkMatch(
+    tenantId: string,
+    value: string,
+    type: CtiIocType,
+  ): Promise<CtiIoc | null> {
+    return this.prisma.ctiIoc.findFirst({ where: { tenantId, type, value } });
   }
 
   async updateIoc(
@@ -110,7 +133,10 @@ export class CtiService implements SecurityModule<CtiIoc, CtiQueryFilters> {
   // Third hop of the EDR -> SIEM -> CTI -> SOAR -> DFIR chain: every new
   // SIEM alert is checked against known IOCs by IP; a match escalates the
   // alert to CRITICAL via 'cti.enrichment.applied' rather than CtiService
-  // touching SiemAlert directly, keeping the two modules decoupled.
+  // touching SiemAlert directly, keeping the two modules decoupled. Scoped
+  // to IP-type IOCs specifically (not value alone) so a HASH- or DOMAIN-type
+  // IOC whose value string happens to collide with an alert's IP can't
+  // produce a semantically wrong match.
   @OnEvent('siem.alert.created')
   async handleSiemAlert(event: UnifiedEvent): Promise<void> {
     const data = event.data as { ip?: string; alertId: string };
@@ -118,7 +144,7 @@ export class CtiService implements SecurityModule<CtiIoc, CtiQueryFilters> {
       return;
     }
 
-    const match = await this.checkMatch(event.tenantId, data.ip);
+    const match = await this.checkMatch(event.tenantId, data.ip, CtiIocType.IP);
     if (!match) {
       return;
     }

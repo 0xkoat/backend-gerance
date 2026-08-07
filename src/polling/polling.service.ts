@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { TenantModule } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -19,6 +19,7 @@ interface IngestibleModule {
 
 @Injectable()
 export class PollingService {
+  private readonly logger = new Logger(PollingService.name);
   private readonly registry: Record<ModuleName, IngestibleModule>;
 
   constructor(
@@ -54,7 +55,16 @@ export class PollingService {
     });
 
     for (const tenantModule of activeTenantModules) {
-      await this.pollOne(tenantModule);
+      try {
+        await this.pollOne(tenantModule);
+      } catch (error) {
+        // One tenant's bad config or a failing ingest() shouldn't abort the
+        // rest of this cycle's tenants — they just wait for the next run.
+        this.logger.error(
+          `Polling failed for tenant ${tenantModule.tenantId} / ${tenantModule.moduleName}`,
+          error,
+        );
+      }
     }
   }
 
