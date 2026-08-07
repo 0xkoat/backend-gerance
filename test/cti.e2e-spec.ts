@@ -7,12 +7,20 @@ import { AppModule } from './../src/app.module';
 import { UsersService } from './../src/users/users.service';
 import { CtiService } from './../src/cti/cti.service';
 import { PrismaService } from './../src/prisma/prisma.service';
+import { Prisma } from './../src/generated/prisma/client';
 import {
   CtiIocType,
   ModuleName,
   Severity,
   UserRole,
 } from './../src/generated/prisma/enums';
+
+function prismaConflictError() {
+  return new Prisma.PrismaClientKnownRequestError('mocked P2002', {
+    code: 'P2002',
+    clientVersion: '7.8.0',
+  });
+}
 
 interface FakeUser {
   id: string;
@@ -378,19 +386,60 @@ describe('EDR -> SIEM -> CTI integration (e2e, real event chain)', () => {
         ),
     },
     ctiIoc: {
-      upsert: jest
-        .fn()
-        .mockImplementation(
-          ({ create }: { create: Record<string, unknown> }) => {
-            const ioc = {
-              id: `ioc-${++idCounter}`,
-              createdAt: new Date(),
-              ...create,
+      create: jest.fn().mockImplementation(
+        ({
+          data,
+        }: {
+          data: Record<string, unknown> & {
+            tenantId: string;
+            type: string;
+            value: string;
+          };
+        }) => {
+          const duplicate = ctiIocs.find(
+            (i) =>
+              i.tenantId === data.tenantId &&
+              i.type === data.type &&
+              i.value === data.value,
+          );
+          if (duplicate) {
+            return Promise.reject(prismaConflictError());
+          }
+          const ioc = {
+            id: `ioc-${++idCounter}`,
+            createdAt: new Date(),
+            ...data,
+          };
+          ctiIocs.push(ioc);
+          return Promise.resolve(ioc);
+        },
+      ),
+      update: jest.fn().mockImplementation(
+        ({
+          where,
+          data,
+        }: {
+          where: {
+            tenantId_type_value: {
+              tenantId: string;
+              type: string;
+              value: string;
             };
-            ctiIocs.push(ioc);
-            return Promise.resolve(ioc);
-          },
-        ),
+          };
+          data: Record<string, unknown>;
+        }) => {
+          const existing = ctiIocs.find(
+            (i) =>
+              i.tenantId === where.tenantId_type_value.tenantId &&
+              i.type === where.tenantId_type_value.type &&
+              i.value === where.tenantId_type_value.value,
+          );
+          if (existing) {
+            Object.assign(existing, data);
+          }
+          return Promise.resolve(existing ?? null);
+        },
+      ),
       findFirst: jest
         .fn()
         .mockImplementation(

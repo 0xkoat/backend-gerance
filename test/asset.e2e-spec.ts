@@ -7,12 +7,20 @@ import { AppModule } from './../src/app.module';
 import { UsersService } from './../src/users/users.service';
 import { AssetService } from './../src/asset/asset.service';
 import { PrismaService } from './../src/prisma/prisma.service';
+import { Prisma } from './../src/generated/prisma/client';
 import {
   CtiIocType,
   ModuleName,
   Severity,
   UserRole,
 } from './../src/generated/prisma/enums';
+
+function prismaConflictError() {
+  return new Prisma.PrismaClientKnownRequestError('mocked P2002', {
+    code: 'P2002',
+    clientVersion: '7.8.0',
+  });
+}
 
 interface FakeUser {
   id: string;
@@ -276,19 +284,60 @@ describe('EDR -> SIEM -> CTI -> SOAR -> DFIR -> Asset feed integration (e2e, ful
         ),
     },
     ctiIoc: {
-      upsert: jest
-        .fn()
-        .mockImplementation(
-          ({ create }: { create: Record<string, unknown> }) => {
-            const ioc = {
-              id: `ioc-${++idCounter}`,
-              createdAt: new Date(),
-              ...create,
+      create: jest.fn().mockImplementation(
+        ({
+          data,
+        }: {
+          data: Record<string, unknown> & {
+            tenantId: string;
+            type: string;
+            value: string;
+          };
+        }) => {
+          const duplicate = ctiIocs.find(
+            (i) =>
+              i.tenantId === data.tenantId &&
+              i.type === data.type &&
+              i.value === data.value,
+          );
+          if (duplicate) {
+            return Promise.reject(prismaConflictError());
+          }
+          const ioc = {
+            id: `ioc-${++idCounter}`,
+            createdAt: new Date(),
+            ...data,
+          };
+          ctiIocs.push(ioc);
+          return Promise.resolve(ioc);
+        },
+      ),
+      update: jest.fn().mockImplementation(
+        ({
+          where,
+          data,
+        }: {
+          where: {
+            tenantId_type_value: {
+              tenantId: string;
+              type: string;
+              value: string;
             };
-            ctiIocs.push(ioc);
-            return Promise.resolve(ioc);
-          },
-        ),
+          };
+          data: Record<string, unknown>;
+        }) => {
+          const existing = ctiIocs.find(
+            (i) =>
+              i.tenantId === where.tenantId_type_value.tenantId &&
+              i.type === where.tenantId_type_value.type &&
+              i.value === where.tenantId_type_value.value,
+          );
+          if (existing) {
+            Object.assign(existing, data);
+          }
+          return Promise.resolve(existing ?? null);
+        },
+      ),
       findFirst: jest
         .fn()
         .mockImplementation(
@@ -421,6 +470,25 @@ describe('EDR -> SIEM -> CTI -> SOAR -> DFIR -> Asset feed integration (e2e, ful
           dfirLinks.push(link);
           return Promise.resolve(link);
         }),
+      findFirst: jest.fn().mockImplementation(
+        ({
+          where,
+        }: {
+          where: {
+            incidentId: string;
+            sourceType: string;
+            sourceId: string;
+          };
+        }) =>
+          Promise.resolve(
+            dfirLinks.find(
+              (l) =>
+                l.incidentId === where.incidentId &&
+                l.sourceType === where.sourceType &&
+                l.sourceId === where.sourceId,
+            ) ?? null,
+          ),
+      ),
     },
     assetFeedEntry: {
       create: jest

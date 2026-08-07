@@ -122,10 +122,25 @@ export class AuthService {
       existing.familyId,
     );
 
-    await this.prisma.refreshToken.update({
-      where: { id: existing.id },
+    // Conditional on revokedAt still being null (not a plain update) so two
+    // concurrent requests presenting the same not-yet-revoked token can't
+    // both win: only the first to land this write actually revokes it. If
+    // the count comes back 0, another request already revoked it between our
+    // read above and this write — that's the exact same "reuse" shape the
+    // revokedAt branch above exists to catch, so treat it identically and
+    // kill the whole family (including the token we just minted).
+    const { count } = await this.prisma.refreshToken.updateMany({
+      where: { id: existing.id, revokedAt: null },
       data: { revokedAt: new Date(), replacedByTokenId: newRefresh.id },
     });
+
+    if (count === 0) {
+      await this.prisma.refreshToken.updateMany({
+        where: { familyId: existing.familyId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
+      throw new UnauthorizedException('Invalid refresh token');
+    }
 
     return {
       accessToken: this.signAccessToken(user),
@@ -163,18 +178,22 @@ export class AuthService {
     await this.usersService.requestPasswordReset(email);
   }
 
+  // The counter itself is bumped via Prisma's atomic increment rather than a
+  // read-then-write, so concurrent wrong-password attempts against the same
+  // account can't under-count each other and delay the lockout.
   private async registerFailedLogin(user: User): Promise<void> {
-    const attempts = user.failedLoginAttempts + 1;
-    await this.prisma.user.update({
+    const updated = await this.prisma.user.update({
       where: { id: user.id },
-      data: {
-        failedLoginAttempts: attempts,
-        lockedUntil:
-          attempts >= LOCKOUT_THRESHOLD
-            ? new Date(Date.now() + LOCKOUT_DURATION_MS)
-            : user.lockedUntil,
-      },
+      data: { failedLoginAttempts: { increment: 1 } },
+      select: { failedLoginAttempts: true },
     });
+
+    if (updated.failedLoginAttempts >= LOCKOUT_THRESHOLD) {
+      await this.prisma.user.update({
+        where: { id: user.id },
+        data: { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) },
+      });
+    }
   }
 
   private signAccessToken(user: SafeUser): string {

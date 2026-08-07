@@ -418,6 +418,20 @@ describe('EdrService', () => {
         service.assignDetection('tenant-1', 'missing-id', caller, 'analyst-1'),
       ).rejects.toThrow('Detection not found');
     });
+
+    it('rejects assigning a detection that is already resolved, instead of silently reopening it', async () => {
+      const caller = authUser({ role: UserRole.ADMIN, userId: 'admin-1' });
+      mockPrismaService.edrDetection.findUnique.mockResolvedValue({
+        ...existing,
+        status: EdrDetectionStatus.RESOLVED,
+        assignedToUserId: 'analyst-1',
+      });
+
+      await expect(
+        service.assignDetection('tenant-1', 'detection-1', caller, 'analyst-2'),
+      ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.edrDetection.update).not.toHaveBeenCalled();
+    });
   });
 
   describe('unassignDetection', () => {

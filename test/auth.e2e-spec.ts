@@ -66,8 +66,16 @@ describe('Auth refresh/logout flow (e2e)', () => {
 
   function findMatching(
     row: FakeRefreshToken,
-    where: { familyId?: string; tokenHash?: string; revokedAt?: null },
+    where: {
+      id?: string;
+      familyId?: string;
+      tokenHash?: string;
+      revokedAt?: null;
+    },
   ): boolean {
+    if (where.id !== undefined && row.id !== where.id) {
+      return false;
+    }
     if (where.familyId !== undefined && row.familyId !== where.familyId) {
       return false;
     }
@@ -91,23 +99,35 @@ describe('Auth refresh/logout flow (e2e)', () => {
             usersById[id] ? { ...usersById[id], hashedPassword } : null,
           ),
         ),
-      update: jest
-        .fn()
-        .mockImplementation(
-          ({
-            where: { id },
-            data,
-          }: {
-            where: { id: string };
-            data: Partial<FakeUser>;
-          }) => {
-            const user = usersById[id];
-            if (user) {
-              Object.assign(user, data);
+      update: jest.fn().mockImplementation(
+        ({
+          where: { id },
+          data,
+        }: {
+          where: { id: string };
+          data: Partial<FakeUser> & {
+            failedLoginAttempts?: number | { increment: number };
+          };
+        }) => {
+          const user = usersById[id];
+          if (user) {
+            // Mimic Prisma's atomic { increment } operator, since
+            // AuthService.registerFailedLogin relies on real Postgres
+            // performing this server-side rather than a read-then-write.
+            const { failedLoginAttempts, ...rest } = data;
+            Object.assign(user, rest);
+            if (
+              typeof failedLoginAttempts === 'object' &&
+              failedLoginAttempts !== null
+            ) {
+              user.failedLoginAttempts += failedLoginAttempts.increment;
+            } else if (typeof failedLoginAttempts === 'number') {
+              user.failedLoginAttempts = failedLoginAttempts;
             }
-            return Promise.resolve(user ?? null);
-          },
-        ),
+          }
+          return Promise.resolve(user ? { ...user } : null);
+        },
+      ),
     },
     refreshToken: {
       create: jest
@@ -156,26 +176,29 @@ describe('Auth refresh/logout flow (e2e)', () => {
             return Promise.resolve(row ?? null);
           },
         ),
-      updateMany: jest
-        .fn()
-        .mockImplementation(
-          ({
-            where,
-            data,
-          }: {
-            where: { familyId?: string; tokenHash?: string; revokedAt?: null };
-            data: Partial<FakeRefreshToken>;
-          }) => {
-            let count = 0;
-            refreshTokens.forEach((row) => {
-              if (findMatching(row, where)) {
-                Object.assign(row, data);
-                count++;
-              }
-            });
-            return Promise.resolve({ count });
-          },
-        ),
+      updateMany: jest.fn().mockImplementation(
+        ({
+          where,
+          data,
+        }: {
+          where: {
+            id?: string;
+            familyId?: string;
+            tokenHash?: string;
+            revokedAt?: null;
+          };
+          data: Partial<FakeRefreshToken>;
+        }) => {
+          let count = 0;
+          refreshTokens.forEach((row) => {
+            if (findMatching(row, where)) {
+              Object.assign(row, data);
+              count++;
+            }
+          });
+          return Promise.resolve({ count });
+        },
+      ),
     },
   };
 

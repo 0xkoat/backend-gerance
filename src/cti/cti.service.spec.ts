@@ -1,14 +1,22 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { Logger, NotFoundException } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import { Prisma } from '../generated/prisma/client';
 import { CtiService, CtiQueryFilters } from './cti.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { CtiIocType, ModuleName, Severity } from '../generated/prisma/enums';
 import { UnifiedEvent } from '../common/security-module/types';
 
+function prismaKnownError(code: string) {
+  return new Prisma.PrismaClientKnownRequestError('mocked prisma error', {
+    code,
+    clientVersion: '7.8.0',
+  });
+}
+
 const mockPrismaService = {
   ctiIoc: {
-    upsert: jest.fn(),
+    create: jest.fn(),
     findUnique: jest.fn(),
     findFirst: jest.fn(),
     findMany: jest.fn(),
@@ -57,26 +65,13 @@ describe('CtiService', () => {
       },
     };
 
-    it('upserts the IOC keyed by tenantId+type+value', async () => {
-      mockPrismaService.ctiIoc.findUnique.mockResolvedValue(null);
-      mockPrismaService.ctiIoc.upsert.mockResolvedValue({ id: 'ioc-1' });
+    it('creates the IOC keyed by tenantId+type+value on a genuine new ingest', async () => {
+      mockPrismaService.ctiIoc.create.mockResolvedValue({ id: 'ioc-1' });
 
       await service.ingest(event);
 
-      expect(mockPrismaService.ctiIoc.upsert).toHaveBeenCalledWith({
-        where: {
-          tenantId_type_value: {
-            tenantId: 'tenant-1',
-            type: CtiIocType.IP,
-            value: '185.220.101.47',
-          },
-        },
-        update: {
-          confidence: 85,
-          source: 'AlienVault OTX',
-          rawData: event.data,
-        },
-        create: {
+      expect(mockPrismaService.ctiIoc.create).toHaveBeenCalledWith({
+        data: {
           tenantId: 'tenant-1',
           type: CtiIocType.IP,
           value: '185.220.101.47',
@@ -85,11 +80,11 @@ describe('CtiService', () => {
           rawData: event.data,
         },
       });
+      expect(mockPrismaService.ctiIoc.update).not.toHaveBeenCalled();
     });
 
     it('emits cti.ioc.created with the ioc id added to data when the IOC is new', async () => {
-      mockPrismaService.ctiIoc.findUnique.mockResolvedValue(null);
-      mockPrismaService.ctiIoc.upsert.mockResolvedValue({ id: 'ioc-1' });
+      mockPrismaService.ctiIoc.create.mockResolvedValue({ id: 'ioc-1' });
 
       await service.ingest(event);
 
@@ -99,33 +94,74 @@ describe('CtiService', () => {
       });
     });
 
-    it('does not emit cti.ioc.created when the IOC already existed (update only)', async () => {
-      mockPrismaService.ctiIoc.findUnique.mockResolvedValue({ id: 'ioc-1' });
-      mockPrismaService.ctiIoc.upsert.mockResolvedValue({ id: 'ioc-1' });
+    // The create-vs-update decision is driven by the DB's own unique
+    // constraint (a P2002 on create means "this IOC already exists"), not a
+    // separate pre-check read — closes a TOCTOU race where two concurrent
+    // ingests of the same IOC could otherwise both see "no existing row" and
+    // both emit cti.ioc.created for what the DB correctly stored as one row.
+    it('falls back to updating confidence/source on a P2002 conflict, without emitting cti.ioc.created', async () => {
+      mockPrismaService.ctiIoc.create.mockRejectedValue(
+        prismaKnownError('P2002'),
+      );
+      mockPrismaService.ctiIoc.update.mockResolvedValue({ id: 'ioc-1' });
 
       await service.ingest(event);
 
+      expect(mockPrismaService.ctiIoc.update).toHaveBeenCalledWith({
+        where: {
+          tenantId_type_value: {
+            tenantId: 'tenant-1',
+            type: CtiIocType.IP,
+            value: '185.220.101.47',
+          },
+        },
+        data: {
+          confidence: 85,
+          source: 'AlienVault OTX',
+          rawData: event.data,
+        },
+      });
       expect(mockEventEmitter.emit).not.toHaveBeenCalled();
+    });
+
+    it('rethrows an error from create() that is not a P2002 conflict', async () => {
+      const dbError = new Error('connection lost');
+      mockPrismaService.ctiIoc.create.mockRejectedValue(dbError);
+
+      await expect(service.ingest(event)).rejects.toThrow(dbError);
+      expect(mockPrismaService.ctiIoc.update).not.toHaveBeenCalled();
     });
   });
 
   describe('checkMatch', () => {
-    it('returns the matching IOC when found', async () => {
+    it('returns the matching IOC when found, scoped to the given type', async () => {
       const ioc = { id: 'ioc-1', value: '185.220.101.47' };
       mockPrismaService.ctiIoc.findFirst.mockResolvedValue(ioc);
 
-      const result = await service.checkMatch('tenant-1', '185.220.101.47');
+      const result = await service.checkMatch(
+        'tenant-1',
+        '185.220.101.47',
+        CtiIocType.IP,
+      );
 
       expect(result).toEqual(ioc);
       expect(mockPrismaService.ctiIoc.findFirst).toHaveBeenCalledWith({
-        where: { tenantId: 'tenant-1', value: '185.220.101.47' },
+        where: {
+          tenantId: 'tenant-1',
+          type: CtiIocType.IP,
+          value: '185.220.101.47',
+        },
       });
     });
 
     it('returns null when no IOC matches', async () => {
       mockPrismaService.ctiIoc.findFirst.mockResolvedValue(null);
 
-      const result = await service.checkMatch('tenant-1', 'clean-ip');
+      const result = await service.checkMatch(
+        'tenant-1',
+        'clean-ip',
+        CtiIocType.IP,
+      );
 
       expect(result).toBeNull();
     });
