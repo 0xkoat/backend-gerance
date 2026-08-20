@@ -81,7 +81,9 @@ export class TenantsService {
     const { users, ...safeTenant } = tenant;
     return {
       ...safeTenant,
-      admins: users.map(({ hashedPassword, ...safeAdmin }) => safeAdmin),
+      admins: users.map(
+        ({ hashedPassword: _hashedPassword, ...safeAdmin }) => safeAdmin,
+      ),
     };
   }
 

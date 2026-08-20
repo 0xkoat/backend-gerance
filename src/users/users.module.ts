@@ -14,7 +14,12 @@ if (!jwtSecret) {
     PrismaModule,
     JwtModule.register({
       secret: jwtSecret,
-      signOptions: { expiresIn: '1h' },
+      // Matches AuthModule's access token lifetime (15m). This registration is used by
+      // UsersController.changeMyPassword to re-sign a fresh access token right after the
+      // mandatory first-login password change — it must not silently mint a longer-lived
+      // token for that flow than login/refresh do. Found stale at 1h (pre-refresh-token-era
+      // value) during the frontend's Phase 1 auth migration verification, 2026-08-07.
+      signOptions: { expiresIn: '15m' },
     }),
   ],
   controllers: [UsersController],

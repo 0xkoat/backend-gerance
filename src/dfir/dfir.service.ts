@@ -54,6 +54,11 @@ export class DfirService implements SecurityModule<
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
+  // SecurityModule.ingest() implementation — a thin adapter over
+  // createIncidentFromEvent below (the real logic, and the other of the
+  // two paths that reach it alongside handleSoarExecution). No links are
+  // passed here since a raw ingested event carries no reference to other
+  // modules' records the way a soar.execution.created payload does.
   async ingest(event: UnifiedEvent): Promise<void> {
     const data = event.data as { title?: string };
     await this.createIncidentFromEvent(

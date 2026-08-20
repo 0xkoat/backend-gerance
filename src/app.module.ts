@@ -20,6 +20,19 @@ import { MustChangePasswordGuard } from './auth/guards/must-change-password.guar
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ScheduleModule } from '@nestjs/schedule';
 
+// Composition root for dependency injection (main.ts is the composition
+// root for HTTP-level middleware/pipes — see its own header comment).
+//
+// providers order matters: NestJS applies multiple APP_GUARD entries in
+// registration order, and each of these three guards depends on the
+// previous one having already run (JwtAuthGuard populates request.user,
+// which RolesGuard and MustChangePasswordGuard both read) — see each
+// guard's own file for what it does. Don't reorder these three without
+// re-reading all three guards' comments first.
+//
+// ThrottlerModule.forRoot's 10-per-60s here is the app-wide default; only
+// AuthController overrides it with the tighter 5-per-60s login/refresh/
+// logout/forgot-password limit (see that controller's own @Throttle()).
 @Module({
   imports: [
     UsersModule,

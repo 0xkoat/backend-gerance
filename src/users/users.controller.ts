@@ -42,7 +42,7 @@ export class UsersController {
       user.userId,
       user.tenantId,
     );
-    const { hashedPassword, ...safeUser } = foundUser;
+    const { hashedPassword: _hashedPassword, ...safeUser } = foundUser;
 
     return safeUser;
   }
@@ -139,7 +139,7 @@ export class UsersController {
       user.tenantId,
     );
 
-    const { hashedPassword, ...safeUser } = createdUser;
+    const { hashedPassword: _hashedPassword, ...safeUser } = createdUser;
     return safeUser;
   }
 
@@ -166,7 +166,9 @@ export class UsersController {
       );
 
     return {
-      users: users.map(({ hashedPassword, ...safeUser }) => safeUser),
+      users: users.map(
+        ({ hashedPassword: _hashedPassword, ...safeUser }) => safeUser,
+      ),
       total,
       page,
       pageSize,
@@ -187,7 +189,7 @@ export class UsersController {
       id,
       user.tenantId,
     );
-    const { hashedPassword, ...safeUser } = foundUser;
+    const { hashedPassword: _hashedPassword, ...safeUser } = foundUser;
 
     return safeUser;
   }
@@ -208,7 +210,7 @@ export class UsersController {
       user.tenantId,
       updateUserDto,
     );
-    const { hashedPassword, ...safeUser } = updatedUser;
+    const { hashedPassword: _hashedPassword, ...safeUser } = updatedUser;
 
     return safeUser;
   }
@@ -232,7 +234,7 @@ export class UsersController {
       user.tenantId,
       changeUserRoleDto.role,
     );
-    const { hashedPassword, ...safeUser } = updatedUser;
+    const { hashedPassword: _hashedPassword, ...safeUser } = updatedUser;
 
     return safeUser;
   }

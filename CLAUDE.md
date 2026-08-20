@@ -15,15 +15,19 @@ See root `CLAUDE.md` for overall project context.
   EDR, DFIR, VM) implements, for consistency across the platform
 - Redis deferred — don't introduce it unless there's a clear need
 
-# Security modules — architecture spec (not yet built)
+# Security modules — architecture spec (built — see "Module implementation plan" below)
 
 Source: root `CLAUDE.md`'s "Security modules architecture" section points here for detail.
-Status as of 2026-08-04: **none of the six modules are implemented yet** — only
-`auth`/`users`/`tenants`/`health` exist under `src/`. `TenantModule` (model) and
-`ModuleName`/`ModuleSourceType` (enums) already exist in `prisma/schema.prisma` — this is
-the platform-level "which modules is this tenant subscribed to" table (matches the spec's
-`tenant_modules`), not any per-module data table. The module-specific tables below (`siem_*`,
-`edr_*`, etc.) don't exist in the schema yet.
+**Status as of 2026-08-19: all six modules are implemented and live-verified** — every phase
+in the "Module implementation plan — SIEM / SOAR / CTI / EDR / DFIR / VM" section below is
+checked off, including the asset aggregator (Phase 7) and real-time SSE delivery (Phase 8).
+The spec shapes documented in this section (below) describe the design that was actually
+built against, kept here as the durable reference for the contract types/DB schema rather
+than removed once implemented. `TenantModule` (model) and `ModuleName`/`ModuleSourceType`
+(enums) exist in `prisma/schema.prisma` — this is the platform-level "which modules is this
+tenant subscribed to" table (matches the spec's `tenant_modules`), not any per-module data
+table; the module-specific tables (`siem_*`, `edr_*`, etc.) all exist too, see each phase's
+own Prisma models below.
 
 **Six modules + one cross-module aggregator**: SIEM (detection & alerts), SOAR (automation),
 CTI (threat intel), EDR (endpoint telemetry), DFIR (incident response), VM (vulnerability
@@ -221,7 +225,13 @@ hour without re-entering credentials.
 - Access token lifetime dropped from `1h` to `15m`. This — not a blocklist — is the real
   mitigation for a stolen access token: a stateless JWT can't be revoked before it expires
   without reintroducing shared state, and Redis stays out of scope, so the fix is shrinking
-  the window instead.
+  the window instead. **Gap found and fixed 2026-08-07** (during the frontend's Phase 1 auth
+  migration, verifying this file against the actual backend source): `users.module.ts` has
+  its own separate `JwtModule` registration — used by `UsersController.changeMyPassword` to
+  re-sign a fresh access token right after the mandatory first-login password change — and
+  it had been left at `expiresIn: '1h'` when this migration landed on 2026-08-05, so that one
+  specific token (the one every newly-created account's first login mints) lived 4x longer
+  than every other access token in the system. Now `15m`, matching `auth.module.ts`.
 - **Rotation on every use, with reuse detection.** `POST /auth/refresh` revokes the
   presented refresh token and issues a new one in the same `familyId`. If a token that's
   already been revoked is presented again — a stolen-and-replayed token, since the
@@ -675,16 +685,70 @@ tenant, `where: { isActive: true }` silently matched nothing.
   dedicated pass that rewrites e2e fixtures to real UUIDs first, not bundled into an unrelated
   change.
 - Verified three ways for the three items that shipped: full unit + e2e suites (491 unit / 187
-  e2e, up from 465 + 176 — new `renameTenant`/`listModules`/`activateModule`/`updateModule`/
+  e2e at the time — up from 465 + 176 — new `renameTenant`/`listModules`/`activateModule`/`updateModule`/
   `deactivateModule` describe blocks in both `tenants.service.spec.ts` and
   `tenants.controller.spec.ts`, `unlinkRecord`/`deleteLink` blocks in the DFIR specs, plus e2e
   route tests for all of it), typecheck and lint clean, and live against the real dev server +
   Postgres as described per-item above. No schema migration was needed this round —
   `TenantModule` already existed, so the earlier Prisma-client-regeneration gotcha didn't recur,
   though `npx prisma generate` was still run proactively before starting the dev server.
+- **Test count stale, corrected 2026-08-19**: this section's "491 unit / 187 e2e" had gone stale
+  — a live `npm test` re-run found **507 unit / 187 e2e**, all passing, with no corresponding
+  entry in this file for what added the extra 16 unit tests (`frontend/CLAUDE.md`'s Phase-13
+  audit entry attributes later backend-internal work — refresh-token race-condition hardening,
+  atomic lockout counter, CTI ingest concurrency — but this file itself never logged it). Caught
+  during a full live QA pass, not a code change; flagged here rather than silently left wrong,
+  per this file's own "update it as reality diverges" rule. Re-verify the count directly with
+  `npm test` before trusting either number if this looks stale again.
 
 # API surface & operational hardening
 
+- **`npm run lint` genuinely is clean now — found broken and fixed same-day, 2026-08-19.**
+  A plain run had contradicted every "lint clean" claim in this file's phase-by-phase log:
+  **73 real errors across 25 files**, none touched by the session that found this — core
+  files including `auth.service.ts`, `jwt.strategy.ts`, `main.ts`, `users.controller.ts`, and
+  most of `src/**/*.spec.ts`/`test/*.e2e-spec.ts`. The likely explanation for how it got this
+  way unnoticed: those historical "lint clean" claims were asserted, not verified against a
+  real `npm run lint` invocation — the exact gap this project's own "verify, don't assume"
+  rule exists to catch; `eslint.config.mjs`'s ruleset and the installed
+  `@typescript-eslint/eslint-plugin` version match what's locked in `package-lock.json`, so
+  this wasn't dependency drift since those claims were written. Fixed the same day, in two
+  parts:
+  - **~55 of the 73 were `no-unsafe-assignment`/`-member-access`/`-call`/`-return` inside
+    `*.spec.ts`/`*.e2e-spec.ts` files, and turned out not to be real application bugs at
+    all** — traced to Jest's own type defs: `expect.any(...)`/`expect.objectContaining(...)`
+    are typed `any` (there's no way for them to know what you're matching against ahead of
+    time), so asserting against a realistically-shaped mock call trips "unsafe" on every
+    matcher, in every spec file. Scoped `no-unsafe-*` off for test files only, via a
+    `files: ['**/*.spec.ts', 'test/**/*.e2e-spec.ts']` override block in `eslint.config.mjs` —
+    application source code keeps the full `recommendedTypeChecked` ruleset unchanged.
+  - **The remaining ~18 were real, and fixed as real code changes**, all re-verified live
+    against the running dev server, not just by re-running the linter: `context.switchToHttp
+    ().getRequest()` typed explicitly as `Request & { user?: AuthenticatedUser }` in both
+    `JwtAuthGuard` and `RolesGuard` (confirmed live: a valid Super Admin token still gets
+    `200` from `GET /tenants`, no token still gets `401`, a wrong-role token still gets
+    `403` — the retyping changed nothing about the actual guard behavior, only how TypeScript
+    sees it); every `@Transform(({ value }) => ...)` callback across the three email/phone-
+    normalizing DTOs (`LoginDto`, `ForgotPasswordDto`, `CreateUserDto`) explicitly typed as
+    `{ value: unknown }` instead of the implicit `any` class-transformer's own
+    `TransformFnParams` declares; `JwtStrategy.validate` de-asynced (no `await` inside it to
+    begin with — Passport accepts a plain return just as well as a `Promise`); `main.ts`'s
+    `declare const module: any` (the webpack-HMR `module.hot` shim, copied from NestJS's own
+    HMR boilerplate) replaced with a real minimal type instead of `any`, plus `void bootstrap
+    ()` and `void app.close()` at its two previously-floating-promise call sites; and every
+    `const { hashedPassword, ...safeX } = user`-shaped destructure across `auth.service.ts`,
+    `tenants.service.ts`, and `users.controller.ts` (9 call sites, all the exact same
+    strip-the-hash-before-responding pattern) renamed to `hashedPassword: _hashedPassword` —
+    paired with a new `varsIgnorePattern: '^_'`/`argsIgnorePattern: '^_'` config for
+    `no-unused-vars`, since a leading underscore marking "deliberately unused" is the
+    idiomatic fix for a destructure-only-to-discard binding, not a real dead-code smell to
+    silence per call site.
+  - Re-verified all four ways after: `npm run lint` (0 errors, 0 warnings), `tsc --noEmit`
+    clean, `prettier --check` clean, and the full suite (507 unit / 187 e2e) still green —
+    plus the live guard-behavior check above, since two of the fixed files are the app's
+    actual security boundary, not just internal logic. Going forward, don't assume a future
+    "lint clean" claim in this file without re-running `npm run lint` for real — that's
+    exactly the assumption that let this go unnoticed.
 - All routes are served under a global `/api` prefix (`app.setGlobalPrefix('api')` in
   `main.ts`) — e.g. `POST /api/auth/login`, not `POST /auth/login`. Any new e2e test must
   hit paths under `/api/...`.
@@ -721,6 +785,29 @@ tenant, `where: { isActive: true }` silently matched nothing.
   against this project's Prisma-7-specific work (driver adapter, `moduleFormat: cjs`,
   `prisma.config.ts` seed wiring, etc., see `docs/internship-report-backend.md` §4.1/§4.11).
   Left deliberately unfixed; don't `npm audit fix --force` this away.
+
+# Platform readiness (2026-08-19)
+
+The backend is functionally complete and live-tested, not just implemented on paper: a full
+manual QA pass (login/lockout, tenant CRUD, user CRUD + password-reset-request flow, every
+module's ingest/query/assign/status-transition routes, the full EDR→SIEM→CTI→SOAR→DFIR
+orchestration chain, live SSE, RBAC across all 4 roles, tenant isolation) was run against a
+real seeded dev DB and confirmed working end-to-end; every finding from that pass and the
+73-error lint-debt discovery above were fixed and re-verified the same day. `npm run lint`,
+`tsc --noEmit`, `prettier --check`, and the full suite (507 unit / 187 e2e) are all clean.
+
+What's actually left is infrastructure, not functionality:
+- **No Dockerfile.** `docker-compose.yml` at the repo root only runs Postgres for local dev —
+  there's no backend (or frontend) image yet.
+- **CI is test-only.** `.github/workflows/test.yml` runs `prisma generate` + `migrate deploy`
+  + the unit/e2e suites on every push — it doesn't build or publish an image, and there's no
+  CD (no deploy step to anywhere).
+- No pre-commit/husky hooks (lint/typecheck/format only run manually or in CI).
+
+The one still-open *functional* gap (not infra) is real vendor API integration for the six
+modules — see "Security modules architecture" above; every module currently ingests from a
+`MockAdapter`, deliberately, pending real API docs. That's a data-source question, not a
+readiness blocker for Dockerizing/deploying what's built.
 
 # Conventions
 
@@ -1226,6 +1313,44 @@ polling-ingestion skeleton come after all six modules exist, since they all read
       `/api/vm/assets`, `/api/edr/detections`, `/api/siem/alerts`, `/api/cti/iocs`,
       `/api/soar/executions`, `/api/dfir/incidents`, and `/api/assets/feed` — all returned real
       seeded data, correctly tenant-scoped and paginated.
+    - **Gap found and fixed 2026-08-08**, during a frontend-side "does the app match the
+      backend's mock data" verification pass: that original `GET /api/assets/feed` check
+      confirmed rows existed and were tenant-scoped, but never inspected `status`/
+      `assignedToUserId` specifically — both were silently omitted from the EDR/SIEM/VM/DFIR
+      `feedRows` construction (dropping to Prisma's column default, `null`, for every single
+      row of those four sources), even though the *real* `AssetService` listeners this script
+      claims to mirror always set them, and even though the seed script's own EDR/SIEM/VM/DFIR
+      rows already carry a fully-decided `status`/`assignedToUserId` in scope at that exact
+      point (`d.status`, `a.assignedToUserId`, etc. — the four loops literally had the values
+      one property-name away and never copied them over). Effect: the frontend's Asset Feed
+      page and dashboard KPIs (`isOpenFeedEntry`, "assigned to me") would show every demo row
+      as unassigned and unopenable-as-open, even for tenants whose real per-module data (VM
+      vulnerabilities, EDR detections, etc.) has plenty of assigned/in-progress records — the
+      six module pages themselves were never affected, only the cross-module feed/dashboard
+      view. Fixed by copying each source row's own `status`/`assignedToUserId` into its
+      `feedRows` entry (SOAR/CTI correctly still have neither field — matches
+      `handleSoarExecution`/`handleCtiIoc`, which never set them in the real listener either).
+      `tsc --noEmit` clean; not re-run against a live seed (`npm run seed:demo`) in this pass —
+      no Postgres available in this sandbox — worth a live re-verification next time someone
+      runs it against a real database.
+    - **`faker.seed(20260819)` added 2026-08-19**, at the top of `main()` — the tenant/company
+      names and person names (and therefore emails, since those derive from the person name)
+      were fully random per run until now, which is exactly right for a "throwaway demo
+      dataset" but broke the moment `frontend/e2e/`'s new Playwright suite needed to hardcode
+      real seeded identities in `frontend/e2e/fixtures/accounts.ts` instead of scraping them
+      from the UI at runtime. Fixing the faker seed makes tenant/person identity generation
+      reproducible across reseeds *in generation order* without touching the module data's own
+      randomness at all — every `randomInt`/`pick`/`Math.random()` call for severities, counts,
+      and assign/status distribution still varies run to run, since none of it goes through
+      `faker`. Verified two ways, not just "it ran": ran `npm run seed:demo` once for real
+      against the live dev DB and confirmed the resulting tenant/email set matches what's now
+      hardcoded in `frontend/e2e/fixtures/accounts.ts`; separately confirmed the determinism
+      claim itself in isolation — a standalone script replaying the same `faker.seed(20260819)`
+      → `company.name()`/`person.firstName()`/`person.lastName()` call sequence twice in a row
+      produced byte-identical output both times, including the exact "Crooks and Sons
+      relationships" / "Katheryn Zemlak" values the real run produced. Not yet verified against
+      a *second* real `npm run seed:demo` run on a fresh DB (would require deleting the current
+      demo tenants first) — worth doing once, next time this file's own dev DB gets reset.
 
 ## Phase 11 — Final integration pass
 

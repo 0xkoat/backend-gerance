@@ -67,7 +67,7 @@ export class AuthService {
       });
     }
 
-    const { hashedPassword, ...userWithoutPassword } = user;
+    const { hashedPassword: _hashedPassword, ...userWithoutPassword } = user;
 
     return userWithoutPassword;
   }
@@ -115,7 +115,7 @@ export class AuthService {
     if (!dbUser) {
       throw new UnauthorizedException('Invalid refresh token');
     }
-    const { hashedPassword, ...user } = dbUser;
+    const { hashedPassword: _hashedPassword, ...user } = dbUser;
 
     const newRefresh = await this.issueRefreshToken(
       existing.userId,
