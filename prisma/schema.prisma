@@ -3,6 +3,17 @@
 
 // Get a free hosted Postgres database in seconds: `npx create-db`
 
+// No `binaryTargets` here on purpose (Dockerization prep, 2026-08-20): this
+// generator + the @prisma/adapter-pg driver adapter (see PrismaService) means
+// query execution goes through a portable WASM query compiler
+// (`query_compiler_fast_bg.postgresql.wasm-base64.js`, verified in
+// src/generated/prisma/internal/class.ts), not a platform-specific native
+// binary — so the classic "wrong libc/OpenSSL in the container" binaryTargets
+// problem doesn't apply to the client. The one native binary still in play is
+// @prisma/engines' schema-engine (used by `prisma migrate deploy`/`db push`,
+// not by the running app) — currently cached as schema-engine-debian-openssl-3.0.x,
+// which is why the Docker plan uses a Debian/`-slim` base (not Alpine/musl)
+// for whichever stage runs migrations, avoiding a musl-variant download fight.
 generator client {
   provider     = "prisma-client"
   output       = "../src/generated/prisma"
