@@ -14,7 +14,7 @@ export class CreateUserDto {
 
   @IsEmail()
   @IsNotEmpty()
-  @Transform(({ value }) =>
+  @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.trim().toLowerCase() : value,
   )
   email!: string;
@@ -32,7 +32,7 @@ export class CreateUserDto {
 
   @IsPhoneNumber('TN')
   @IsNotEmpty()
-  @Transform(({ value }) =>
+  @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.replace(/[\s\-()]/g, '') : value,
   )
   phoneNumber!: string;

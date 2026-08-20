@@ -7,6 +7,8 @@ import {
 import { Reflector } from '@nestjs/core';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { UserRole } from '../../generated/prisma/enums';
+import type { Request } from 'express';
+import type { AuthenticatedUser } from '../jwt.strategy';
 
 // Second of the three global guards, runs after JwtAuthGuard, so
 // context.user is already populated for any non-public route by the time
@@ -24,7 +26,9 @@ export class RolesGuard implements CanActivate {
     if (!requiredRoles) {
       return true;
     }
-    const { user } = context.switchToHttp().getRequest();
+    const { user } = context
+      .switchToHttp()
+      .getRequest<Request & { user?: AuthenticatedUser }>();
     if (!user || !user.role) {
       throw new UnauthorizedException('User role not found');
     }

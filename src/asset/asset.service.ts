@@ -23,6 +23,21 @@ import type { AssetFeedEntry } from '../generated/prisma/client';
 export class AssetService {
   constructor(private readonly prisma: PrismaService) {}
 
+  // Six listeners below, one per module's `*.created` event — each maps
+  // that module's own event/payload shape down to the shared
+  // AssetFeedEntry row shape (tenantId/source/type/severity/timestamp/
+  // summary/sourceId). `type` is always a hardcoded literal describing
+  // what was just created ('detection', 'alert', ...), never forwarded
+  // from the triggering event's own `type` field — that field isn't
+  // reliable for this (e.g. a SIEM alert can be created from a `type:
+  // 'event'` input once severity alone crosses the HIGH/CRITICAL
+  // threshold in SiemService.ingest()) and AssetFeedEntry.type needs to
+  // describe record kinds ('incident', 'execution') the ingestion-side
+  // EventType doesn't cover at all. `status`/`assignedToUserId` are only
+  // set for the four modules with an assign/status workflow (EDR, SIEM,
+  // VM, DFIR per the module plan's workflow-scope decision) — CTI and
+  // SOAR rows are created without either field, since neither model has
+  // that column to begin with.
   @OnEvent('edr.detection.created')
   async handleEdrDetection(event: UnifiedEvent): Promise<void> {
     const data = event.data as {
@@ -223,6 +238,8 @@ export class AssetService {
     });
   }
 
+  // Sets both fields — assigning a record always sets who it's assigned to
+  // and moves its status (e.g. OPEN -> ASSIGNED), never just one.
   private async applyAssignment(payload: RecordAssignedPayload): Promise<void> {
     await this.prisma.assetFeedEntry.updateMany({
       where: {
@@ -237,6 +254,9 @@ export class AssetService {
     });
   }
 
+  // Status only — an escalate/resolve action doesn't touch who the record
+  // is assigned to (resolving deliberately keeps assignedToUserId as a
+  // "who resolved this" record, it isn't cleared).
   private async applyStatusChange(
     payload: RecordStatusChangedPayload,
   ): Promise<void> {
@@ -250,6 +270,11 @@ export class AssetService {
     });
   }
 
+  // Both fields again, but the reverse of applyAssignment — status reverts
+  // to OPEN and the assignee is cleared. Reuses RecordStatusChangedPayload's
+  // shape rather than a dedicated type, since "unassigned" and
+  // "status_changed" are genuinely the same payload shape on the wire (see
+  // types.ts's own note on this).
   private async applyUnassignment(
     payload: RecordStatusChangedPayload,
   ): Promise<void> {

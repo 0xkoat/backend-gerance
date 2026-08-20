@@ -42,6 +42,12 @@ export class SoarService implements SecurityModule<
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
+  // SecurityModule.ingest() implementation — thin on purpose. SOAR has no
+  // record of its own to create from a raw event (unlike the other five
+  // modules); it only cares whether the event names an alert to check
+  // playbooks against, which evaluateTriggers below actually does. Silently
+  // no-ops on an event with no alertId rather than erroring, since most
+  // ingested events won't have one.
   async ingest(event: UnifiedEvent): Promise<void> {
     const data = event.data as { alertId?: string };
     if (!data.alertId) {

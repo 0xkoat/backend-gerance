@@ -7,6 +7,8 @@ import {
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
+import type { Request } from 'express';
+import type { AuthenticatedUser } from '../jwt.strategy';
 
 // First of three global guards (registered via APP_GUARD in app.module.ts,
 // applied in registration order: this, then RolesGuard, then
@@ -33,7 +35,9 @@ export class JwtAuthGuard extends AuthGuard('jwt') implements CanActivate {
       throw new UnauthorizedException('Unauthorized');
     }
 
-    const request = context.switchToHttp().getRequest();
+    const request = context
+      .switchToHttp()
+      .getRequest<Request & { user?: AuthenticatedUser }>();
     const user = request.user;
 
     if (!user) {

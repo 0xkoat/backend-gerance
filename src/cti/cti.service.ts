@@ -114,6 +114,12 @@ export class CtiService implements SecurityModule<CtiIoc, CtiQueryFilters> {
     return this.prisma.ctiIoc.update({ where: { id }, data: dto });
   }
 
+  // A true hard delete — the one deliberate exception to every other
+  // module's "records are never deleted, only status/assignee changes"
+  // pattern. A false-positive IOC needs to actually disappear, not just be
+  // marked resolved. AssetService listens for the emitted event below to
+  // remove the matching AssetFeedEntry row too, so the deletion doesn't
+  // leave a dangling row in the unified feed.
   async deleteIoc(tenantId: string, id: string): Promise<void> {
     const ioc = await this.prisma.ctiIoc.findUnique({ where: { id } });
     if (!ioc || ioc.tenantId !== tenantId) {

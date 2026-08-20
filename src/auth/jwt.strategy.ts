@@ -37,7 +37,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   // decorator). Trusts the token's claims as-is, no DB lookup here, so a
   // role/tenantId change on the user's row doesn't take effect until their
   // access token expires (up to 15 minutes, per the short-lived-token design).
-  async validate(payload: JwtPayload): Promise<AuthenticatedUser> {
+  // Not async — there's no DB lookup or other await here (see the comment
+  // above), and Passport's own contract accepts a plain returned value
+  // just as well as a Promise; `async` with nothing to await was flagged
+  // by eslint's require-await rule for good reason.
+  validate(payload: JwtPayload): AuthenticatedUser {
     return {
       userId: payload.sub,
       role: payload.role,

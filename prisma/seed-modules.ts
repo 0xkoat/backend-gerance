@@ -714,13 +714,24 @@ async function seedTenant(
 
   // ---- Asset feed — mirrors what AssetService's real listeners would have
   // written, for demo purposes only (the one deliberate exception to "only
-  // AssetService writes this table").
+  // AssetService writes this table"). `status`/`assignedToUserId` carry over
+  // each source record's own already-decided values (not a fresh 'OPEN'/
+  // null) because in the real system these two fields track the source
+  // record's *current* state via applyAssignment/applyStatusChange, not just
+  // its state at creation — since this demo data simulates records that
+  // already have assign/status-change history baked in (see each row's own
+  // `status`/`assignedToUserId` above), the feed row has to reflect that
+  // same history to actually match, not just the module tables. SOAR/CTI
+  // correctly have neither field, matching AssetService's real
+  // handleSoarExecution/handleCtiIoc, which never set them either.
   const feedRows: Array<{
     id: string;
     tenantId: string;
     source: ModuleName;
     type: string;
     severity: Severity;
+    status: string | null;
+    assignedToUserId: string | null;
     timestamp: Date;
     summary: string;
     sourceId: string;
@@ -732,6 +743,8 @@ async function seedTenant(
       source: ModuleName.EDR,
       type: 'detection',
       severity: d.severity,
+      status: d.status,
+      assignedToUserId: d.assignedToUserId,
       timestamp: d.createdAt,
       summary: `${d.detectionName} on ${edrEndpointById.get(d.endpointId)?.hostname ?? 'unknown-host'}`,
       sourceId: d.id,
@@ -744,6 +757,8 @@ async function seedTenant(
       source: ModuleName.SIEM,
       type: 'alert',
       severity: a.severity,
+      status: a.status,
+      assignedToUserId: a.assignedToUserId,
       timestamp: a.createdAt,
       summary: a.title,
       sourceId: a.id,
@@ -759,6 +774,8 @@ async function seedTenant(
       source: ModuleName.SOAR,
       type: 'execution',
       severity: pick(SEVERITIES),
+      status: null,
+      assignedToUserId: null,
       timestamp: e.createdAt,
       summary: `Playbook "${playbookById.get(e.playbookId)?.name ?? 'unknown'}" executed`,
       sourceId: e.id,
@@ -771,6 +788,8 @@ async function seedTenant(
       source: ModuleName.DFIR,
       type: 'incident',
       severity: i.severity,
+      status: i.status,
+      assignedToUserId: i.assignedToUserId,
       timestamp: i.createdAt,
       summary: i.title,
       sourceId: i.id,
@@ -783,6 +802,8 @@ async function seedTenant(
       source: ModuleName.CTI,
       type: 'ioc',
       severity: Severity.LOW,
+      status: null,
+      assignedToUserId: null,
       timestamp: ioc.createdAt,
       summary: `${ioc.type} IOC: ${ioc.value}`,
       sourceId: ioc.id,
@@ -795,6 +816,8 @@ async function seedTenant(
       source: ModuleName.VM,
       type: 'vulnerability',
       severity: v.severity,
+      status: v.status,
+      assignedToUserId: v.assignedToUserId,
       timestamp: v.createdAt,
       summary: v.description,
       sourceId: v.id,
@@ -816,6 +839,16 @@ async function seedTenant(
 }
 
 async function main() {
+  // Fixed seed: makes the faker-generated tenant/company names and person
+  // names (and therefore emails, since those derive from the person name)
+  // reproducible run over run — added 2026-08-19 so the new Playwright e2e
+  // suite (frontend/e2e/fixtures/accounts.ts) can hardcode real seeded
+  // identities instead of scraping them from the UI at runtime. Doesn't
+  // make the *data* deterministic — every `randomInt`/`pick`/`Math.random()`
+  // call below (severities, counts, assign/status distribution, etc.) still
+  // varies per run, only identity generation does, since it's the only part
+  // that happens before those calls in generation order.
+  faker.seed(20260819);
   console.log(`Seeding ${TENANT_COUNT} demo tenants with large module datasets...\n`);
   const hashedPassword = await argon2.hash(SHARED_PASSWORD);
 
