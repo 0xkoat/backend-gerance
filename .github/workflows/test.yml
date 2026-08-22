@@ -38,9 +38,14 @@ jobs:
 
       - run: npm ci
 
-      - run: npx prisma generate
+      # --no-install forces npx to use the already-`npm ci`'d local copy and fail loudly if
+      # it's somehow missing, instead of silently downloading+running an arbitrary version
+      # on the fly — closes SonarCloud's "npx can install packages on-demand"/"define exact
+      # package version" findings without needing to hardcode a version to bump on every
+      # Prisma upgrade.
+      - run: npx --no-install prisma generate
 
-      - run: npx prisma migrate deploy
+      - run: npx --no-install prisma migrate deploy
 
       - run: npm test
 
