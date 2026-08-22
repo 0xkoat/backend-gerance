@@ -56,6 +56,15 @@ jobs:
             # (and because workflow_dispatch's summary shows it), it just isn't the value
             # actually driving this cd anymore.
             cd /opt/gerance-platform
-            export TAG="${{ github.event.workflow_run.head_sha || github.sha }}"
+            # BACKEND_TAG, not a shared TAG — docker-compose.image.yml used one shared TAG
+            # for every service's image tag until this same day (2026-08-22): frontend's
+            # deploy.yml setting TAG to *its own* commit sha, then running
+            # `docker compose up -d frontend`, made Compose recompute backend's desired
+            # image using that same (wrong) sha too — since `up` reconciles the whole
+            # dependency graph it's starting, not just the named service — and fail with
+            # "not found" trying to pull a backend image tag that was never built. Splitting
+            # into BACKEND_TAG/FRONTEND_TAG (docker-compose.image.yml's own comment has the
+            # full account) means this repo's deploy only ever moves its own tag.
+            export BACKEND_TAG="${{ github.event.workflow_run.head_sha || github.sha }}"
             docker compose -f docker-compose.image.yml pull migrate backend
             docker compose -f docker-compose.image.yml up -d migrate backend
