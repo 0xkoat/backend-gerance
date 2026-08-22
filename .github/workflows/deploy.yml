@@ -46,7 +46,16 @@ jobs:
             # secrets list). Skip this block entirely if you've made them public instead.
             echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
 
-            cd "$VM_DEPLOY_PATH"
+            # Hardcoded rather than $VM_DEPLOY_PATH — appleboy/ssh-action only forwards env
+            # vars named in `envs:` above into the remote shell (REGISTRY only), so
+            # $VM_DEPLOY_PATH was silently empty on the VM, `cd ""` was a no-op, and the
+            # compose file lookup below resolved against the SSH login's home directory
+            # instead of /opt/gerance-platform — the actual cause of a real failed deploy
+            # run (2026-08-22): "open /home/***/docker-compose.image.yml: no such file or
+            # directory". VM_DEPLOY_PATH stays in `env:` above for readability/documentation
+            # (and because workflow_dispatch's summary shows it), it just isn't the value
+            # actually driving this cd anymore.
+            cd /opt/gerance-platform
             export TAG="${{ github.event.workflow_run.head_sha || github.sha }}"
             docker compose -f docker-compose.image.yml pull migrate backend
             docker compose -f docker-compose.image.yml up -d migrate backend
