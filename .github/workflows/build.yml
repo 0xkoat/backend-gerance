@@ -1,0 +1,122 @@
+name: Build
+
+# Separate from test.yml on purpose — test.yml stays the fast lint+unit+e2e feedback loop on
+# every push/PR. This workflow does the two things that need more than that: a SonarCloud
+# scan (needs a coverage report, so it reruns lint+unit tests itself rather than importing
+# test.yml's — GitHub Actions has no clean way to share a coverage artifact across two
+# separately-triggered workflow files) and, only on a real push to main, building and
+# pushing the two backend images to GHCR for deploy.yml to pick up.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  sonar:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18.4
+        env:
+          POSTGRES_USER: secops
+          POSTGRES_PASSWORD: secops
+          POSTGRES_DB: secops
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U secops"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://secops:secops@localhost:5432/secops?schema=public
+      JWT_SECRET: ci-test-secret
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # SonarCloud's new-code/blame features want real history, not the default
+          # single-commit shallow checkout.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx prisma generate
+
+      - run: npx prisma migrate deploy
+
+      - run: npm run lint
+
+      - run: npm test -- --coverage
+
+      - name: SonarCloud scan
+        uses: SonarSource/sonarqube-scan-action@v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          # SonarCloud specifically (not a self-hosted server) — the action's default host
+          # when SONAR_HOST_URL is unset.
+        with:
+          # sonar.organization is a guess (your GitHub username, matching SonarCloud's
+          # default when importing a repo) — confirm against the real value once the
+          # SonarCloud project exists, fix here if it differs.
+          args: >
+            -Dsonar.organization=0xkoat
+            -Dsonar.projectKey=0xkoat_backend-gerance
+            -Dsonar.sources=src
+            -Dsonar.tests=src,test
+            -Dsonar.test.inclusions=**/*.spec.ts,test/**/*.e2e-spec.ts
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+            -Dsonar.exclusions=**/generated/**,**/node_modules/**,**/dist/**,**/coverage/**
+
+  build-and-push:
+    needs: sonar
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The always-running, traffic-serving image (backend/Dockerfile's `runner` target —
+      # see DOCKERIZATION_TODO.md's migrator/runner split entry for why it's split from the
+      # image below).
+      - name: Build and push runner image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: runner
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/gerance-backend:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/gerance-backend:latest
+
+      # The one-off migrate/seed job image — never serves traffic, ships the full Prisma
+      # CLI + ts-node/typescript the runner image above deliberately excludes.
+      - name: Build and push migrator image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: migrator
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/gerance-backend-migrator:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/gerance-backend-migrator:latest
