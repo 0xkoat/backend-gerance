@@ -796,13 +796,25 @@ real seeded dev DB and confirmed working end-to-end; every finding from that pas
 73-error lint-debt discovery above were fixed and re-verified the same day. `npm run lint`,
 `tsc --noEmit`, `prettier --check`, and the full suite (507 unit / 187 e2e) are all clean.
 
-What's actually left is infrastructure, not functionality:
-- **No Dockerfile.** `docker-compose.yml` at the repo root only runs Postgres for local dev —
-  there's no backend (or frontend) image yet.
-- **CI is test-only.** `.github/workflows/test.yml` runs `prisma generate` + `migrate deploy`
-  + the unit/e2e suites on every push — it doesn't build or publish an image, and there's no
-  CD (no deploy step to anywhere).
-- No pre-commit/husky hooks (lint/typecheck/format only run manually or in CI).
+~~What's actually left is infrastructure, not functionality: No Dockerfile... CI is
+test-only...~~ **No longer true, fixed 2026-08-21/22.** `backend/Dockerfile` is a real
+multi-stage build (`builder`/`migrator`/`runner`, `node:22-slim`), live-tested against the
+real dev Postgres and, since the `migrator` split, down to 515MB for the always-running
+`runner` image — see `../DOCKERIZATION_TODO.md` at the repo root for the full phase-by-phase
+build log, every claim in it backed by a live verification, not just written and assumed.
+`docker-compose.yml` (also moved to the repo root, orchestrating both `backend` and
+`frontend`) and `docker-compose.image.yml` (the `image:`-reference variant for CI/deploy) both
+exist and were live-run end to end: Postgres → migrate → backend all healthy, a real login
+through the full compose stack, and a real EDR→SIEM SSE event pair delivered live through the
+containerized stack. CI is no longer test-only either — `.github/workflows/build.yml` (Sonar
+scan, then on a real push to `main`, build+push three images to GHCR) and `deploy.yml`
+(SSH-deploys `migrate`+`backend` to an Azure VM, triggered by `build.yml` succeeding) now sit
+alongside the pre-existing `test.yml`. See `../CICD_SETUP.md` for the secrets/one-time-VM-setup
+checklist this needed — that checklist's own completion (have the GitHub secrets actually been
+added, has the VM actually been provisioned) isn't independently confirmed from this repo
+alone, verify directly rather than assuming a green Actions tab. **Left, still genuinely
+infra not functionality**: no pre-commit/husky hooks (lint/typecheck/format only run manually
+or in CI).
 
 The one still-open *functional* gap (not infra) is real vendor API integration for the six
 modules — see "Security modules architecture" above; every module currently ingests from a

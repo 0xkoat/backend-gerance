@@ -29,9 +29,12 @@ jobs:
       JWT_SECRET: ci-test-secret
 
     steps:
-      - uses: actions/checkout@v4
+      # Pinned to a full commit SHA, not a floating tag — a tag can be retargeted to
+      # different code later without this file changing. Resolved live against the real v4
+      # tag (verified 2026-08-22 via two independent GitHub API endpoints).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           cache: npm
