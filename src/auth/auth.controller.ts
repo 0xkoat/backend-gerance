@@ -102,7 +102,13 @@ export class AuthController {
   private setRefreshCookie(res: Response, tokens: TokenPair): void {
     res.cookie(REFRESH_TOKEN_COOKIE, tokens.refreshToken, {
       httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
+      // HTTPS_ENABLED, not NODE_ENV — same real bug as frontend-gerance's session.ts (see
+      // that file's own comment): a genuine production build can still be served over plain
+      // HTTP with no TLS in front of it, and a Secure cookie set over plain HTTP to
+      // anything other than localhost is silently dropped by the browser. Login returned
+      // 200 with a correct token pair, but neither cookie ever got stored — hit for real,
+      // 2026-08-22, deploying to a real VM IP over plain HTTP. Defaults to unset/false.
+      secure: process.env.HTTPS_ENABLED === 'true',
       // 'lax' assumes the frontend reaches this API same-site (e.g. via a
       // Next.js BFF proxy). A frontend calling this API directly cross-site
       // will need 'none' + secure (HTTPS) instead — revisit once the
