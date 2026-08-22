@@ -3,11 +3,376 @@
 
 // Get a free hosted Postgres database in seconds: `npx create-db`
 
+// No `binaryTargets` here on purpose (Dockerization prep, 2026-08-20): this
+// generator + the @prisma/adapter-pg driver adapter (see PrismaService) means
+// query execution goes through a portable WASM query compiler
+// (`query_compiler_fast_bg.postgresql.wasm-base64.js`, verified in
+// src/generated/prisma/internal/class.ts), not a platform-specific native
+// binary — so the classic "wrong libc/OpenSSL in the container" binaryTargets
+// problem doesn't apply to the client. The one native binary still in play is
+// @prisma/engines' schema-engine (used by `prisma migrate deploy`/`db push`,
+// not by the running app) — currently cached as schema-engine-debian-openssl-3.0.x,
+// which is why the Docker plan uses a Debian/`-slim` base (not Alpine/musl)
+// for whichever stage runs migrations, avoiding a musl-variant download fight.
 generator client {
-  provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
 }
 
 datasource db {
   provider = "postgresql"
+}
+
+model Tenant {
+  id                String            @id @default(uuid()) @db.Uuid
+  name              String
+  createdAt         DateTime          @default(now())
+  users             User[]
+  modules           TenantModule[]
+  vmAssets          VmAsset[]
+  vmVulnerabilities VmVulnerability[]
+  edrEndpoints      EdrEndpoint[]
+  edrDetections     EdrDetection[]
+  siemLogs          SiemLog[]
+  siemAlerts        SiemAlert[]
+  ctiIocs           CtiIoc[]
+  soarPlaybooks     SoarPlaybook[]
+  soarExecutions    SoarExecution[]
+  dfirIncidents     DfirIncident[]
+  assetFeedEntries  AssetFeedEntry[]
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  ANALYST
+  VIEWER
+}
+
+model User {
+  id                       String      @id @default(uuid()) @db.Uuid
+  email                    String      @unique
+  phoneNumber              String
+  name                     String
+  role                     UserRole    @default(VIEWER)
+  hashedPassword           String
+  tenantId                 String?     @db.Uuid
+  tenant                   Tenant?     @relation(fields: [tenantId], references: [id])
+  passwordResetRequestedAt DateTime?
+  mustChangePassword       Boolean     @default(false)
+  failedLoginAttempts      Int         @default(0)
+  lockedUntil              DateTime?
+  createdAt                DateTime    @default(now())
+  updatedAt                DateTime    @updatedAt
+  assignedSiemAlerts       SiemAlert[]
+  assignedEdrDetections    EdrDetection[]
+  assignedDfirIncidents    DfirIncident[]
+  assignedVmVulnerabilities VmVulnerability[]
+  refreshTokens            RefreshToken[]
+  passwordHistory          PasswordHistory[]
+
+  @@index([tenantId])
+}
+
+model PasswordHistory {
+  id             String   @id @default(uuid()) @db.Uuid
+  userId         String   @db.Uuid
+  user           User     @relation(fields: [userId], references: [id])
+  hashedPassword String
+  createdAt      DateTime @default(now())
+
+  @@index([userId])
+}
+
+model RefreshToken {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @db.Uuid
+  user              User      @relation(fields: [userId], references: [id])
+  tokenHash         String    @unique
+  familyId          String    @db.Uuid
+  expiresAt         DateTime
+  revokedAt         DateTime?
+  replacedByTokenId String?   @db.Uuid
+  createdAt         DateTime  @default(now())
+
+  @@index([userId])
+  @@index([familyId])
+}
+
+enum ModuleName {
+  SIEM
+  SOAR
+  CTI
+  EDR
+  DFIR
+  VM
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum VmVulnerabilitiesStatus {
+  OPEN
+  REMEDIATED
+  ACCEPTED_RISK
+}
+
+model TenantModule {
+  id         String     @id @default(uuid()) @db.Uuid
+  tenantId   String     @db.Uuid
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  config     Json?
+  isActive   Boolean    @default(true)
+  moduleName ModuleName
+
+  @@unique([tenantId, moduleName])
+  @@index([tenantId])
+}
+
+model VmAsset {
+  id                String            @id @default(uuid()) @db.Uuid
+  tenantId          String            @db.Uuid
+  tenant            Tenant            @relation(fields: [tenantId], references: [id])
+  name              String
+  ip                String
+  type              String
+  createdAt         DateTime          @default(now())
+  vmVulnerabilities VmVulnerability[]
+
+  @@unique([tenantId, ip])
+  @@index([tenantId])
+}
+
+model VmVulnerability {
+  id               String                  @id @default(uuid()) @db.Uuid
+  tenantId         String                  @db.Uuid
+  tenant           Tenant                  @relation(fields: [tenantId], references: [id])
+  assetId          String                  @db.Uuid
+  asset            VmAsset                 @relation(fields: [assetId], references: [id])
+  severity         Severity
+  description      String
+  createdAt        DateTime                @default(now())
+  cveId            String?
+  status           VmVulnerabilitiesStatus @default(OPEN)
+  assignedToUserId String?                 @db.Uuid
+  assignedToUser   User?                   @relation(fields: [assignedToUserId], references: [id])
+  rawData          Json?
+
+  @@index([tenantId])
+}
+
+enum CtiIocType {
+  IP
+  DOMAIN
+  URL
+  HASH
+  EMAIL
+}
+
+model CtiIoc {
+  id         String     @id @default(uuid()) @db.Uuid
+  tenantId   String     @db.Uuid
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  type       CtiIocType
+  value      String
+  confidence Int
+  source     String
+  rawData    Json?
+  createdAt  DateTime   @default(now())
+
+  @@unique([tenantId, type, value])
+  @@index([tenantId])
+}
+
+enum EdrEndpointStatus {
+  ONLINE
+  OFFLINE
+  UNKNOWN
+  DECOMMISSIONED
+}
+
+model EdrEndpoint {
+  id         String            @id @default(uuid()) @db.Uuid
+  tenantId   String            @db.Uuid
+  tenant     Tenant            @relation(fields: [tenantId], references: [id])
+  hostname   String
+  ip         String
+  os         String
+  status     EdrEndpointStatus @default(UNKNOWN)
+  lastSeen   DateTime          @default(now())
+  detections EdrDetection[]
+
+  @@unique([tenantId, hostname])
+  @@index([tenantId])
+}
+
+enum EdrDetectionStatus {
+  OPEN
+  ASSIGNED
+  ESCALATED
+  RESOLVED
+}
+
+model EdrDetection {
+  id               String             @id @default(uuid()) @db.Uuid
+  tenantId         String             @db.Uuid
+  tenant           Tenant             @relation(fields: [tenantId], references: [id])
+  endpointId       String             @db.Uuid
+  endpoint         EdrEndpoint        @relation(fields: [endpointId], references: [id])
+  detectionName    String
+  description      String?
+  mitreTechniques  String[]           @default([])
+  severity         Severity
+  status           EdrDetectionStatus @default(OPEN)
+  assignedToUserId String?            @db.Uuid
+  assignedToUser   User?              @relation(fields: [assignedToUserId], references: [id])
+  rawData          Json?
+  createdAt        DateTime           @default(now())
+
+  @@index([tenantId])
+}
+
+model SiemLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  tenantId  String   @db.Uuid
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  source    String
+  eventType String
+  severity  Severity
+  rawData   Json?
+  timestamp DateTime @default(now())
+
+  @@index([tenantId])
+}
+
+enum SiemAlertStatus {
+  OPEN
+  ASSIGNED
+  ESCALATED
+  RESOLVED
+}
+
+model SiemAlert {
+  id               String          @id @default(uuid()) @db.Uuid
+  tenantId         String          @db.Uuid
+  tenant           Tenant          @relation(fields: [tenantId], references: [id])
+  title            String
+  description      String?
+  mitreTechniques  String[]        @default([])
+  severity         Severity
+  status           SiemAlertStatus @default(OPEN)
+  assignedToUserId String?         @db.Uuid
+  assignedToUser   User?           @relation(fields: [assignedToUserId], references: [id])
+  rawData          Json?
+  createdAt        DateTime        @default(now())
+  soarExecutions   SoarExecution[]
+
+  @@index([tenantId])
+}
+
+model SoarPlaybook {
+  id               String          @id @default(uuid()) @db.Uuid
+  tenantId         String          @db.Uuid
+  tenant           Tenant          @relation(fields: [tenantId], references: [id])
+  name             String
+  triggerCondition Json
+  actions          Json
+  isActive         Boolean         @default(true)
+  createdAt        DateTime        @default(now())
+  executions       SoarExecution[]
+
+  @@index([tenantId])
+}
+
+enum SoarExecutionStatus {
+  PENDING
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+model SoarExecution {
+  id         String              @id @default(uuid()) @db.Uuid
+  tenantId   String              @db.Uuid
+  tenant     Tenant              @relation(fields: [tenantId], references: [id])
+  playbookId String              @db.Uuid
+  playbook   SoarPlaybook        @relation(fields: [playbookId], references: [id])
+  alertId    String              @db.Uuid
+  alert      SiemAlert           @relation(fields: [alertId], references: [id])
+  status     SoarExecutionStatus @default(PENDING)
+  logs       String?
+  createdAt  DateTime            @default(now())
+
+  @@index([tenantId])
+}
+
+enum DfirIncidentStatus {
+  OPEN
+  INVESTIGATING
+  ESCALATED
+  CONTAINED
+  RESOLVED
+}
+
+model DfirIncident {
+  id               String             @id @default(uuid()) @db.Uuid
+  tenantId         String             @db.Uuid
+  tenant           Tenant             @relation(fields: [tenantId], references: [id])
+  title            String
+  description      String?
+  mitreTechniques  String[]           @default([])
+  severity         Severity
+  status           DfirIncidentStatus @default(OPEN)
+  assignedToUserId String?            @db.Uuid
+  assignedToUser   User?              @relation(fields: [assignedToUserId], references: [id])
+  createdAt        DateTime           @default(now())
+  links            DfirLink[]
+
+  @@index([tenantId])
+}
+
+enum DfirLinkSourceType {
+  SIEM_ALERT
+  SIEM_LOG
+  EDR_DETECTION
+  VM_VULNERABILITY
+  CTI_IOC
+  SOAR_EXECUTION
+}
+
+model DfirLink {
+  id         String             @id @default(uuid()) @db.Uuid
+  tenantId   String             @db.Uuid
+  incidentId String             @db.Uuid
+  incident   DfirIncident       @relation(fields: [incidentId], references: [id])
+  sourceType DfirLinkSourceType
+  sourceId   String             @db.Uuid
+
+  @@index([tenantId])
+  @@index([incidentId])
+}
+
+// Materialized cross-module feed  populated by
+// AssetService's event listeners, never written to directly by another module.
+model AssetFeedEntry {
+  id               String     @id @default(uuid()) @db.Uuid
+  tenantId         String     @db.Uuid
+  tenant           Tenant     @relation(fields: [tenantId], references: [id])
+  source           ModuleName
+  type             String
+  severity         Severity
+  status           String?
+  assignedToUserId String?    @db.Uuid
+  timestamp        DateTime
+  summary          String
+  sourceId         String     @db.Uuid
+  createdAt        DateTime   @default(now())
+
+  @@index([tenantId, timestamp])
+  @@index([tenantId, source, sourceId])
 }

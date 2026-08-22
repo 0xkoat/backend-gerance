@@ -1,0 +1,55 @@
+name: Test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18.4
+        env:
+          POSTGRES_USER: secops
+          POSTGRES_PASSWORD: secops
+          POSTGRES_DB: secops
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U secops"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://secops:secops@localhost:5432/secops?schema=public
+      JWT_SECRET: ci-test-secret
+
+    steps:
+      # Pinned to a full commit SHA, not a floating tag — a tag can be retargeted to
+      # different code later without this file changing. Resolved live against the real v4
+      # tag (verified 2026-08-22 via two independent GitHub API endpoints).
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # --no-install forces npx to use the already-`npm ci`'d local copy and fail loudly if
+      # it's somehow missing, instead of silently downloading+running an arbitrary version
+      # on the fly — closes SonarCloud's "npx can install packages on-demand"/"define exact
+      # package version" findings without needing to hardcode a version to bump on every
+      # Prisma upgrade.
+      - run: npx --no-install prisma generate
+
+      - run: npx --no-install prisma migrate deploy
+
+      - run: npm test
+
+      - run: npm run test:e2e

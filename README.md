@@ -23,12 +23,76 @@
 
 ## Description
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository — backend for the
+SecOPs multi-tenant SOC SaaS platform (SIEM, SOAR, CTI, EDR, DFIR, VM modules).
+
+## User provisioning & RBAC hierarchy
+
+There is no public sign-up. Every user is created by someone above them in the hierarchy —
+never by themselves.
+
+```
+                     ┌───────────────────────────────────────┐
+                     │              SUPER ADMIN                │
+                     │  seeded once via a seed script —         │
+                     │  NEVER exposed as an HTTP route          │
+                     │  • not bound to any tenant                │
+                     │  • creates Tenants                        │
+                     │  • creates each Tenant's first Admin      │
+                     └───────────────────┬─────────────────────┘
+                                         │ creates
+                                         ▼
+                     ┌───────────────────────────────────────┐
+                     │                 ADMIN                    │
+                     │  tenant-scoped                            │
+                     │  • full control within their own tenant   │
+                     │  • creates Analyst / Viewer accounts,      │
+                     │    scoped to their own tenant_id only      │
+                     └───────────────────┬─────────────────────┘
+                                         │ creates
+                         ┌───────────────┴────────────────┐
+                         ▼                                 ▼
+             ┌─────────────────────┐           ┌─────────────────────┐
+             │       ANALYST         │           │       VIEWER          │
+             │  tenant-scoped         │           │  tenant-scoped         │
+             │  investigate alerts,   │           │  read-only:            │
+             │  SIEM/CTI/DFIR work,   │           │  dashboards & alerts   │
+             │  can trigger SOAR      │           │                        │
+             └─────────────────────┘           └─────────────────────┘
+```
+
+Rules:
+- No `/auth/register` or equivalent self-signup endpoint exists.
+- A new user's `tenant_id` always comes from the creator's own auth token, never from the
+  request body.
+- A new user's `role` is determined by which endpoint is called, never by a client-supplied
+  field.
+- The first Super Admin is bootstrapped by a one-time seed script, not an API call.
+
+## Environment variables
+
+Copy `.env.example` to `.env` and fill in:
+
+- `DATABASE_URL` — PostgreSQL connection string.
+- `JWT_SECRET` — required; the app fails fast on startup if it's missing.
 
 ## Project setup
 
 ```bash
 $ npm install
+```
+
+## Database setup
+
+```bash
+# apply migrations
+$ npx prisma migrate deploy
+
+# generate the Prisma client (required before running or testing)
+$ npx prisma generate
+
+# bootstrap the first Super Admin(s) — reads prisma/seed-data.json (gitignored)
+$ npx prisma db seed
 ```
 
 ## Compile and run the project
@@ -43,6 +107,17 @@ $ npm run start:dev
 # production mode
 $ npm run start:prod
 ```
+
+## API
+
+All routes are served under a global `/api` prefix (e.g. `POST /api/auth/login`).
+
+- `GET /api/health` — public health check (database + memory), useful for uptime monitoring
+  and quick debugging of which dependency is down.
+- A Postman collection is available in `postman/` (with automatic bearer-token propagation
+  from login responses) for manual testing.
+- Security baseline: `helmet()` security headers (HSTS with preload), and rate limiting
+  (`@nestjs/throttler`) on top of JWT + role-based guards on every route.
 
 ## Run tests
 

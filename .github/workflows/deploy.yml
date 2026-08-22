@@ -1,0 +1,52 @@
+name: Deploy
+
+# Triggered by build.yml finishing successfully on main (not by push directly — this makes
+# sure a deploy never fires against images that failed to build/push), plus a manual button
+# for redeploying the current `latest` tag without a new commit (e.g. after fixing something
+# on the VM itself).
+#
+# Deploys only this repo's own services (`migrate`, `backend`) — never touches `postgres` or
+# `frontend`, which are provisioned/deployed independently (frontend has its own deploy.yml
+# in the frontend-gerance repo; postgres is a one-time manual `up` on the VM, see the
+# one-time-setup note in DOCKERIZATION_TODO.md / the chat that built this pipeline).
+#
+# Assumes docker-compose.image.yml + a real .env already exist on the VM at
+# $VM_DEPLOY_PATH — this workflow does not create or scp them. They live at the repo root
+# (gerance-platform/), a location neither this repo nor frontend-gerance's checkout
+# contains, so there's nothing here to keep in sync automatically; update them on the VM by
+# hand if they ever change.
+
+on:
+  workflow_run:
+    workflows: [Build]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+
+env:
+  VM_DEPLOY_PATH: /opt/gerance-platform
+  REGISTRY: ghcr.io/${{ github.repository_owner }}
+
+jobs:
+  deploy:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy migrate + backend over SSH
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
+        with:
+          host: ${{ secrets.AZURE_VM_HOST }}
+          username: ${{ secrets.AZURE_VM_USER }}
+          key: ${{ secrets.AZURE_VM_SSH_KEY }}
+          envs: REGISTRY
+          script: |
+            set -e
+            # Only needed if the GHCR packages are kept private (the default — see the
+            # secrets list). Skip this block entirely if you've made them public instead.
+            echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+
+            cd "$VM_DEPLOY_PATH"
+            export TAG="${{ github.event.workflow_run.head_sha || github.sha }}"
+            docker compose -f docker-compose.image.yml pull migrate backend
+            docker compose -f docker-compose.image.yml up -d migrate backend

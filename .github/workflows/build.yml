@@ -1,0 +1,141 @@
+name: Build
+
+# Separate from test.yml on purpose — test.yml stays the fast lint+unit+e2e feedback loop on
+# every push/PR. This workflow does the two things that need more than that: a SonarCloud
+# scan (needs a coverage report, so it reruns lint+unit tests itself rather than importing
+# test.yml's — GitHub Actions has no clean way to share a coverage artifact across two
+# separately-triggered workflow files) and, only on a real push to main, building and
+# pushing the two backend images to GHCR for deploy.yml to pick up.
+#
+# Every `uses:` below is pinned to a full commit SHA, not a floating version tag — a tag
+# (even one from a trusted publisher) can be retargeted to different code later without this
+# file ever changing, a real supply-chain vector GitHub itself documents. Each SHA was
+# resolved live against the real tag (verified 2026-08-22 via two independent GitHub API
+# endpoints, not guessed) — the trailing `# vX` comment is just for a human to see which
+# release it corresponds to; only the SHA is what actually pins.
+#
+# `permissions:` is set per-job, not once at workflow level (SonarCloud flagged the
+# workflow-level version as over-broad — least privilege means the `sonar` job, which never
+# pushes anything, shouldn't inherit `packages: write` just because a sibling job needs it).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  sonar:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    services:
+      postgres:
+        image: postgres:18.4
+        env:
+          POSTGRES_USER: secops
+          POSTGRES_PASSWORD: secops
+          POSTGRES_DB: secops
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U secops"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://secops:secops@localhost:5432/secops?schema=public
+      JWT_SECRET: ci-test-secret
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          # SonarCloud's new-code/blame features want real history, not the default
+          # single-commit shallow checkout.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # --no-install forces npx to use the already-`npm ci`'d local copy and fail loudly if
+      # it's somehow missing, instead of silently downloading+running an arbitrary version
+      # on the fly — closes SonarCloud's "npx can install packages on-demand"/"define exact
+      # package version" findings without needing to hardcode a version to bump on every
+      # Prisma upgrade.
+      - run: npx --no-install prisma generate
+
+      - run: npx --no-install prisma migrate deploy
+
+      - run: npm run lint
+
+      - run: npm test -- --coverage
+
+      - name: SonarCloud scan
+        uses: SonarSource/sonarqube-scan-action@22918119ff8e1ca75a623e15c8296b6ea4fbe28f # v8
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          # SonarCloud specifically (not a self-hosted server) — the action's default host
+          # when SONAR_HOST_URL is unset.
+        with:
+          # sonar.organization is a guess (your GitHub username, matching SonarCloud's
+          # default when importing a repo) — confirm against the real value once the
+          # SonarCloud project exists, fix here if it differs.
+          args: >
+            -Dsonar.organization=0xkoat
+            -Dsonar.projectKey=0xkoat_backend-gerance
+            -Dsonar.sources=src
+            -Dsonar.tests=src,test
+            -Dsonar.test.inclusions=**/*.spec.ts,test/**/*.e2e-spec.ts
+            -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info
+            -Dsonar.exclusions=**/generated/**,**/node_modules/**,**/dist/**,**/coverage/**
+
+  build-and-push:
+    needs: sonar
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The always-running, traffic-serving image (backend/Dockerfile's `runner` target —
+      # see DOCKERIZATION_TODO.md's migrator/runner split entry for why it's split from the
+      # image below).
+      - name: Build and push runner image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          target: runner
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/gerance-backend:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/gerance-backend:latest
+
+      # The one-off migrate/seed job image — never serves traffic, ships the full Prisma
+      # CLI + ts-node/typescript the runner image above deliberately excludes.
+      - name: Build and push migrator image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
+        with:
+          context: .
+          target: migrator
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/gerance-backend-migrator:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/gerance-backend-migrator:latest

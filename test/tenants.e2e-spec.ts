@@ -1,0 +1,529 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
+import request from 'supertest';
+import { App } from 'supertest/types';
+import * as argon2 from 'argon2';
+import { AppModule } from './../src/app.module';
+import { UsersService } from './../src/users/users.service';
+import { PrismaService } from './../src/prisma/prisma.service';
+import { UserRole } from './../src/generated/prisma/enums';
+
+describe('TenantsController (e2e)', () => {
+  let app: INestApplication<App>;
+
+  const PASSWORD = 'Correct-password1!';
+  let hashedPassword: string;
+
+  interface FakeUser {
+    id: string;
+    email: string;
+    name: string;
+    phoneNumber: string;
+    role: UserRole;
+    tenantId: string | null;
+    mustChangePassword: boolean;
+  }
+
+  const superAdminUser: FakeUser = {
+    id: 'super-admin-1',
+    email: 'super-admin@x.com',
+    name: 'Super Admin',
+    phoneNumber: '+21620000000',
+    role: UserRole.SUPER_ADMIN,
+    tenantId: null,
+    mustChangePassword: false,
+  };
+
+  const adminUser: FakeUser = {
+    id: 'admin-1',
+    email: 'admin@x.com',
+    name: 'Admin',
+    phoneNumber: '+21620000001',
+    role: UserRole.ADMIN,
+    tenantId: 'tenant-1',
+    mustChangePassword: false,
+  };
+
+  const usersByEmail: Record<string, FakeUser> = {
+    [superAdminUser.email]: superAdminUser,
+    [adminUser.email]: adminUser,
+  };
+
+  const mockUsersService = {
+    findByEmail: jest.fn(),
+  };
+
+  const mockPrismaService = {
+    tenant: {
+      findMany: jest.fn(),
+      findUnique: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+    },
+    user: {
+      deleteMany: jest.fn(),
+    },
+    tenantModule: {
+      findMany: jest.fn(),
+      create: jest.fn(),
+      update: jest.fn(),
+      delete: jest.fn(),
+      deleteMany: jest.fn(),
+    },
+    assetFeedEntry: { deleteMany: jest.fn() },
+    dfirLink: { deleteMany: jest.fn() },
+    dfirIncident: { deleteMany: jest.fn() },
+    soarExecution: { deleteMany: jest.fn() },
+    soarPlaybook: { deleteMany: jest.fn() },
+    siemAlert: { deleteMany: jest.fn() },
+    siemLog: { deleteMany: jest.fn() },
+    edrDetection: { deleteMany: jest.fn() },
+    edrEndpoint: { deleteMany: jest.fn() },
+    ctiIoc: { deleteMany: jest.fn() },
+    vmVulnerability: { deleteMany: jest.fn() },
+    vmAsset: { deleteMany: jest.fn() },
+    $transaction: jest.fn(),
+    onModuleInit: jest.fn(),
+    onModuleDestroy: jest.fn(),
+    refreshToken: {
+      create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+      deleteMany: jest.fn(),
+    },
+    passwordHistory: { deleteMany: jest.fn() },
+  };
+
+  async function loginAs(email: string): Promise<string> {
+    const response = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ email, password: PASSWORD })
+      .expect(200);
+
+    return (response.body as { access_token: string }).access_token;
+  }
+
+  beforeAll(async () => {
+    hashedPassword = await argon2.hash(PASSWORD);
+  });
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    mockUsersService.findByEmail.mockImplementation((email: string) => {
+      const user = usersByEmail[email];
+      return Promise.resolve(user ? { ...user, hashedPassword } : null);
+    });
+
+    const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [AppModule],
+    })
+      .overrideProvider(UsersService)
+      .useValue(mockUsersService)
+      .overrideProvider(PrismaService)
+      .useValue(mockPrismaService)
+      .compile();
+
+    app = moduleFixture.createNestApplication();
+    app.setGlobalPrefix('api');
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        transform: true,
+        forbidNonWhitelisted: true,
+      }),
+    );
+    await app.init();
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  describe('POST /tenants', () => {
+    const createBody = {
+      tenantName: 'Acme Corp',
+      name: 'Alice Admin',
+      email: 'alice@acme.com',
+      password: 'Str0ng!Passw0rd',
+      phoneNumber: '+21620000099',
+    };
+
+    it('allows a Super Admin to create a tenant with its first Admin', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.$transaction.mockResolvedValue({
+        tenant: {
+          id: 'tenant-2',
+          name: 'Acme Corp',
+          createdAt: new Date().toISOString(),
+        },
+        admin: {
+          id: 'new-admin-1',
+          name: 'Alice Admin',
+          email: 'alice@acme.com',
+          phoneNumber: '+21620000099',
+          role: UserRole.ADMIN,
+          tenantId: 'tenant-2',
+        },
+      });
+
+      const response = await request(app.getHttpServer())
+        .post('/api/tenants')
+        .set('Authorization', `Bearer ${token}`)
+        .send(createBody)
+        .expect(201);
+
+      expect(mockPrismaService.$transaction).toHaveBeenCalled();
+      expect(response.body).toMatchObject({
+        tenant: { name: 'Acme Corp' },
+        admin: { email: 'alice@acme.com' },
+      });
+
+      const body = response.body as { admin: Record<string, unknown> };
+      expect(body.admin).not.toHaveProperty('hashedPassword');
+    });
+
+    it('rejects an Admin (not Super Admin)', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .post('/api/tenants')
+        .set('Authorization', `Bearer ${token}`)
+        .send(createBody)
+        .expect(403);
+      expect(mockPrismaService.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects a request with no token', () => {
+      return request(app.getHttpServer())
+        .post('/api/tenants')
+        .send(createBody)
+        .expect(401);
+    });
+
+    it('rejects a request missing required fields', async () => {
+      const token = await loginAs(superAdminUser.email);
+
+      await request(app.getHttpServer())
+        .post('/api/tenants')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ tenantName: 'Acme Corp' })
+        .expect(400);
+      expect(mockPrismaService.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('GET /tenants', () => {
+    it('allows a Super Admin to list all tenants', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenant.findMany.mockResolvedValue([
+        {
+          id: 'tenant-1',
+          name: 'Tenant One',
+          createdAt: new Date().toISOString(),
+        },
+        {
+          id: 'tenant-2',
+          name: 'Tenant Two',
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+
+      const response = await request(app.getHttpServer())
+        .get('/api/tenants')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(response.body).toHaveLength(2);
+    });
+
+    it('rejects an Admin', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .get('/api/tenants')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+    });
+  });
+
+  describe('GET /tenants/:id', () => {
+    it('allows a Super Admin to fetch a single tenant with its Admins', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        id: 'tenant-1',
+        name: 'Tenant One',
+        createdAt: new Date().toISOString(),
+        users: [
+          {
+            id: 'admin-1',
+            name: 'Alice Admin',
+            role: UserRole.ADMIN,
+            hashedPassword: 'secret-hash',
+          },
+        ],
+      });
+
+      const response = await request(app.getHttpServer())
+        .get('/api/tenants/tenant-1')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(response.body).toMatchObject({
+        id: 'tenant-1',
+        name: 'Tenant One',
+      });
+      const body = response.body as { admins: Array<Record<string, unknown>> };
+      expect(body.admins).toHaveLength(1);
+      expect(body.admins[0]).not.toHaveProperty('hashedPassword');
+    });
+
+    it('returns 404 when the tenant does not exist', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenant.findUnique.mockResolvedValue(null);
+
+      await request(app.getHttpServer())
+        .get('/api/tenants/missing-id')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(404);
+    });
+
+    it('rejects an Admin', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .get('/api/tenants/tenant-1')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+    });
+  });
+
+  describe('PATCH /tenants/:id', () => {
+    it('allows a Super Admin to rename a tenant', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        id: 'tenant-1',
+        name: 'Old Name',
+      });
+      mockPrismaService.tenant.update.mockResolvedValue({
+        id: 'tenant-1',
+        name: 'New Name',
+      });
+
+      const response = await request(app.getHttpServer())
+        .patch('/api/tenants/tenant-1')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'New Name' })
+        .expect(200);
+
+      expect(mockPrismaService.tenant.update).toHaveBeenCalledWith({
+        where: { id: 'tenant-1' },
+        data: { name: 'New Name' },
+      });
+      expect(response.body).toMatchObject({ name: 'New Name' });
+    });
+
+    it('returns 404 when the tenant does not exist', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenant.findUnique.mockResolvedValue(null);
+
+      await request(app.getHttpServer())
+        .patch('/api/tenants/missing-id')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'New Name' })
+        .expect(404);
+    });
+
+    it('rejects an Admin', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .patch('/api/tenants/tenant-1')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'New Name' })
+        .expect(403);
+      expect(mockPrismaService.tenant.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('tenant modules', () => {
+    beforeEach(() => {
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        id: 'tenant-1',
+        name: 'Tenant One',
+      });
+    });
+
+    it("allows a Super Admin to list a tenant's modules", async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenantModule.findMany.mockResolvedValue([
+        { id: 'tm-1', tenantId: 'tenant-1', moduleName: 'SIEM' },
+      ]);
+
+      const response = await request(app.getHttpServer())
+        .get('/api/tenants/tenant-1/modules')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(response.body).toHaveLength(1);
+    });
+
+    it('allows a Super Admin to activate a module', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenantModule.create.mockResolvedValue({
+        id: 'tm-1',
+        tenantId: 'tenant-1',
+        moduleName: 'EDR',
+        isActive: true,
+      });
+
+      const response = await request(app.getHttpServer())
+        .post('/api/tenants/tenant-1/modules')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ moduleName: 'EDR' })
+        .expect(201);
+
+      expect(mockPrismaService.tenantModule.create).toHaveBeenCalledWith({
+        data: { tenantId: 'tenant-1', moduleName: 'EDR', config: undefined },
+      });
+      expect(response.body).toMatchObject({ moduleName: 'EDR' });
+    });
+
+    it('rejects an invalid moduleName', async () => {
+      const token = await loginAs(superAdminUser.email);
+
+      await request(app.getHttpServer())
+        .post('/api/tenants/tenant-1/modules')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ moduleName: 'NOT_A_MODULE' })
+        .expect(400);
+      expect(mockPrismaService.tenantModule.create).not.toHaveBeenCalled();
+    });
+
+    it('allows a Super Admin to update a module', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenantModule.update.mockResolvedValue({
+        id: 'tm-1',
+        tenantId: 'tenant-1',
+        moduleName: 'EDR',
+        isActive: false,
+      });
+
+      const response = await request(app.getHttpServer())
+        .patch('/api/tenants/tenant-1/modules/EDR')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ isActive: false })
+        .expect(200);
+
+      expect(mockPrismaService.tenantModule.update).toHaveBeenCalledWith({
+        where: {
+          tenantId_moduleName: { tenantId: 'tenant-1', moduleName: 'EDR' },
+        },
+        data: { isActive: false },
+      });
+      expect(response.body).toMatchObject({ isActive: false });
+    });
+
+    it('allows a Super Admin to deactivate (remove) a module', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenantModule.delete.mockResolvedValue({
+        id: 'tm-1',
+      });
+
+      await request(app.getHttpServer())
+        .delete('/api/tenants/tenant-1/modules/EDR')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(mockPrismaService.tenantModule.delete).toHaveBeenCalledWith({
+        where: {
+          tenantId_moduleName: { tenantId: 'tenant-1', moduleName: 'EDR' },
+        },
+      });
+    });
+
+    it('rejects an Admin from every module route', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .get('/api/tenants/tenant-1/modules')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      await request(app.getHttpServer())
+        .post('/api/tenants/tenant-1/modules')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ moduleName: 'EDR' })
+        .expect(403);
+    });
+  });
+
+  describe('DELETE /tenants/:id', () => {
+    it('allows a Super Admin to delete a tenant and all its accounts', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenant.findUnique.mockResolvedValue({
+        id: 'tenant-1',
+        name: 'Tenant One',
+        createdAt: new Date().toISOString(),
+        users: [],
+      });
+      mockPrismaService.$transaction.mockResolvedValue([
+        { count: 0 }, // assetFeedEntry
+        { count: 0 }, // dfirLink
+        { count: 0 }, // dfirIncident
+        { count: 0 }, // soarExecution
+        { count: 0 }, // soarPlaybook
+        { count: 0 }, // siemAlert
+        { count: 0 }, // siemLog
+        { count: 0 }, // edrDetection
+        { count: 0 }, // edrEndpoint
+        { count: 0 }, // ctiIoc
+        { count: 0 }, // vmVulnerability
+        { count: 0 }, // vmAsset
+        { count: 1 }, // tenantModule
+        { count: 3 }, // refreshToken
+        { count: 3 }, // passwordHistory
+        { count: 3 }, // user
+        {
+          id: 'tenant-1',
+          name: 'Tenant One',
+          createdAt: new Date().toISOString(),
+        }, // tenant.delete()
+      ]);
+
+      const response = await request(app.getHttpServer())
+        .delete('/api/tenants/tenant-1')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(mockPrismaService.$transaction).toHaveBeenCalled();
+      expect(response.body).toEqual({
+        message: 'Tenant and all its accounts deleted successfully',
+        id: 'tenant-1',
+      });
+    });
+
+    it('returns 404 when the tenant does not exist', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockPrismaService.tenant.findUnique.mockResolvedValue(null);
+
+      await request(app.getHttpServer())
+        .delete('/api/tenants/missing-id')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(404);
+      expect(mockPrismaService.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects an Admin', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .delete('/api/tenants/tenant-1')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      expect(mockPrismaService.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects a request with no token', () => {
+      return request(app.getHttpServer())
+        .delete('/api/tenants/tenant-1')
+        .expect(401);
+    });
+  });
+});
