@@ -7,6 +7,10 @@ node_modules/
 .env.local
 .env.*.local
 
+prisma/seed-data.json
+
+/docs
+
 /coverage
 
 *.log
@@ -18,3 +22,7 @@ yarn-error.log*
 Thumbs.db
 
 /src/generated/prisma
+postman/
+
+.remember
+.claude

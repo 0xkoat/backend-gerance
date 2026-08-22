@@ -1,0 +1,727 @@
+import { Test, TestingModule } from '@nestjs/testing';
+import {
+  ConflictException,
+  INestApplication,
+  NotFoundException,
+  UnauthorizedException,
+  ValidationPipe,
+} from '@nestjs/common';
+import request from 'supertest';
+import { App } from 'supertest/types';
+import * as argon2 from 'argon2';
+import { AppModule } from './../src/app.module';
+import { UsersService } from './../src/users/users.service';
+import { PrismaService } from './../src/prisma/prisma.service';
+import { UserRole } from './../src/generated/prisma/enums';
+
+describe('UsersController (e2e)', () => {
+  let app: INestApplication<App>;
+
+  const PASSWORD = 'Correct-password1!';
+  let hashedPassword: string;
+
+  interface FakeUser {
+    id: string;
+    email: string;
+    name: string;
+    phoneNumber: string;
+    role: UserRole;
+    tenantId: string | null;
+    mustChangePassword: boolean;
+  }
+
+  const adminUser: FakeUser = {
+    id: 'admin-1',
+    email: 'admin@x.com',
+    name: 'Admin',
+    phoneNumber: '+21612345678',
+    role: UserRole.ADMIN,
+    tenantId: 'tenant-1',
+    mustChangePassword: false,
+  };
+
+  const analystUser: FakeUser = {
+    id: 'analyst-1',
+    email: 'analyst@x.com',
+    name: 'Analyst',
+    phoneNumber: '+21612345679',
+    role: UserRole.ANALYST,
+    tenantId: 'tenant-1',
+    mustChangePassword: false,
+  };
+
+  const viewerUser: FakeUser = {
+    id: 'viewer-1',
+    email: 'viewer@x.com',
+    name: 'Viewer',
+    phoneNumber: '+21612345680',
+    role: UserRole.VIEWER,
+    tenantId: 'tenant-1',
+    mustChangePassword: false,
+  };
+
+  const noTenantAdminUser: FakeUser = {
+    id: 'admin-no-tenant',
+    email: 'admin-no-tenant@x.com',
+    name: 'Admin No Tenant',
+    phoneNumber: '+21612345681',
+    role: UserRole.ADMIN,
+    tenantId: null,
+    mustChangePassword: false,
+  };
+
+  const resetPendingUser: FakeUser = {
+    id: 'reset-pending-1',
+    email: 'reset-pending@x.com',
+    name: 'Reset Pending',
+    phoneNumber: '+21612345682',
+    role: UserRole.ANALYST,
+    tenantId: 'tenant-1',
+    mustChangePassword: true,
+  };
+
+  const usersByEmail: Record<string, FakeUser> = {
+    [adminUser.email]: adminUser,
+    [analystUser.email]: analystUser,
+    [viewerUser.email]: viewerUser,
+    [noTenantAdminUser.email]: noTenantAdminUser,
+    [resetPendingUser.email]: resetPendingUser,
+  };
+
+  const mockUsersService = {
+    findByEmail: jest.fn(),
+    findByIdForTenant: jest.fn(),
+    createUser: jest.fn(),
+    findAllForTenant: jest.fn(),
+    updateUserForTenant: jest.fn(),
+    changeRoleForTenant: jest.fn(),
+    removeUserForTenant: jest.fn(),
+    changePassword: jest.fn(),
+    resetPasswordForTenant: jest.fn(),
+  };
+
+  async function loginAs(email: string): Promise<string> {
+    const response = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ email, password: PASSWORD })
+      .expect(200);
+
+    return (response.body as { access_token: string }).access_token;
+  }
+
+  beforeAll(async () => {
+    hashedPassword = await argon2.hash(PASSWORD);
+  });
+
+  beforeEach(async () => {
+    jest.clearAllMocks();
+    mockUsersService.findByEmail.mockImplementation((email: string) => {
+      const user = usersByEmail[email];
+      return Promise.resolve(user ? { ...user, hashedPassword } : null);
+    });
+
+    const moduleFixture: TestingModule = await Test.createTestingModule({
+      imports: [AppModule],
+    })
+      .overrideProvider(UsersService)
+      .useValue(mockUsersService)
+      .overrideProvider(PrismaService)
+      .useValue({
+        onModuleInit: jest.fn(),
+        onModuleDestroy: jest.fn(),
+        refreshToken: {
+          create: jest.fn().mockResolvedValue({ id: 'refresh-token-stub' }),
+        },
+      })
+      .compile();
+
+    app = moduleFixture.createNestApplication();
+    app.setGlobalPrefix('api');
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        transform: true,
+        forbidNonWhitelisted: true,
+      }),
+    );
+    await app.init();
+  });
+
+  afterEach(async () => {
+    await app.close();
+  });
+
+  describe('GET /users/me', () => {
+    it('returns the caller own record for any authenticated role', async () => {
+      const token = await loginAs(analystUser.email);
+      mockUsersService.findByIdForTenant.mockResolvedValue({
+        ...analystUser,
+        hashedPassword,
+      });
+
+      const response = await request(app.getHttpServer())
+        .get('/api/users/me')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(response.body).not.toHaveProperty('hashedPassword');
+      expect(response.body).toMatchObject({ id: analystUser.id });
+    });
+
+    it('rejects a request with no token', () => {
+      return request(app.getHttpServer()).get('/api/users/me').expect(401);
+    });
+
+    it('rejects a caller not scoped to a tenant', async () => {
+      const token = await loginAs(noTenantAdminUser.email);
+
+      await request(app.getHttpServer())
+        .get('/api/users/me')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+    });
+  });
+
+  describe('POST /users', () => {
+    const createBody = {
+      name: 'New Analyst',
+      email: 'new-analyst@x.com',
+      password: 'Str0ng!Passw0rd',
+      phoneNumber: '+21620345699',
+      role: UserRole.ANALYST,
+    };
+
+    it('allows an Admin to create a user in their own tenant', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.createUser.mockResolvedValue({
+        ...createBody,
+        id: 'new-1',
+        tenantId: adminUser.tenantId,
+        hashedPassword,
+      });
+
+      const response = await request(app.getHttpServer())
+        .post('/api/users')
+        .set('Authorization', `Bearer ${token}`)
+        .send(createBody)
+        .expect(201);
+
+      expect(mockUsersService.createUser).toHaveBeenCalledWith(
+        expect.objectContaining({ email: createBody.email }),
+        UserRole.ANALYST,
+        adminUser.tenantId,
+      );
+      expect(response.body).not.toHaveProperty('hashedPassword');
+    });
+
+    it('rejects an Analyst attempting to create a user', async () => {
+      const token = await loginAs(analystUser.email);
+
+      await request(app.getHttpServer())
+        .post('/api/users')
+        .set('Authorization', `Bearer ${token}`)
+        .send(createBody)
+        .expect(403);
+      expect(mockUsersService.createUser).not.toHaveBeenCalled();
+    });
+
+    it('rejects a Viewer attempting to create a user', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .post('/api/users')
+        .set('Authorization', `Bearer ${token}`)
+        .send(createBody)
+        .expect(403);
+    });
+
+    it('rejects a role outside the allowed set (e.g. SUPER_ADMIN)', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .post('/api/users')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ ...createBody, role: UserRole.SUPER_ADMIN })
+        .expect(400);
+      expect(mockUsersService.createUser).not.toHaveBeenCalled();
+    });
+
+    it('rejects a request missing required fields', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .post('/api/users')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ email: createBody.email })
+        .expect(400);
+    });
+  });
+
+  describe('GET /users', () => {
+    it('allows an Admin to list a page of users in their tenant', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.findAllForTenant.mockResolvedValue({
+        users: [
+          { ...adminUser, hashedPassword },
+          { ...analystUser, hashedPassword },
+        ],
+        total: 2,
+        page: 1,
+        pageSize: 20,
+      });
+
+      const response = await request(app.getHttpServer())
+        .get('/api/users')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(mockUsersService.findAllForTenant).toHaveBeenCalledWith(
+        adminUser.tenantId,
+        1,
+        20,
+      );
+      const body = response.body as {
+        users: Array<Record<string, unknown>>;
+        total: number;
+      };
+      expect(body.total).toBe(2);
+      expect(body.users).toHaveLength(2);
+      body.users.forEach((user) =>
+        expect(user).not.toHaveProperty('hashedPassword'),
+      );
+    });
+
+    it('forwards page and pageSize query params to the service', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.findAllForTenant.mockResolvedValue({
+        users: [],
+        total: 0,
+        page: 2,
+        pageSize: 5,
+      });
+
+      await request(app.getHttpServer())
+        .get('/api/users?page=2&pageSize=5')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(mockUsersService.findAllForTenant).toHaveBeenCalledWith(
+        adminUser.tenantId,
+        2,
+        5,
+      );
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .get('/api/users')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+    });
+  });
+
+  describe('GET /users/:id', () => {
+    it('allows an Admin to fetch a user in their tenant', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.findByIdForTenant.mockResolvedValue({
+        ...analystUser,
+        hashedPassword,
+      });
+
+      const response = await request(app.getHttpServer())
+        .get(`/api/users/${analystUser.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(response.body).not.toHaveProperty('hashedPassword');
+    });
+
+    it('returns 404 when the service reports the user as not found', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.findByIdForTenant.mockRejectedValue(
+        new NotFoundException('User not found'),
+      );
+
+      await request(app.getHttpServer())
+        .get('/api/users/missing-id')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(404);
+    });
+
+    it('rejects an Analyst', async () => {
+      const token = await loginAs(analystUser.email);
+
+      await request(app.getHttpServer())
+        .get(`/api/users/${adminUser.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+    });
+  });
+
+  describe('PATCH /users/:id', () => {
+    it('allows an Admin to update a user in their tenant', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.updateUserForTenant.mockResolvedValue({
+        ...analystUser,
+        name: 'Updated Name',
+        hashedPassword,
+      });
+
+      const response = await request(app.getHttpServer())
+        .patch(`/api/users/${analystUser.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Updated Name' })
+        .expect(200);
+
+      expect(response.body).toMatchObject({ name: 'Updated Name' });
+      expect(response.body).not.toHaveProperty('hashedPassword');
+    });
+
+    it('rejects an attempt to change the role through this route', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .patch(`/api/users/${analystUser.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ role: UserRole.ADMIN })
+        .expect(400);
+      expect(mockUsersService.updateUserForTenant).not.toHaveBeenCalled();
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .patch(`/api/users/${analystUser.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ name: 'Nope' })
+        .expect(403);
+    });
+  });
+
+  describe('PATCH /users/:id/role', () => {
+    it('allows an Admin to change another user role', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.changeRoleForTenant.mockResolvedValue({
+        ...analystUser,
+        role: UserRole.VIEWER,
+        hashedPassword,
+      });
+
+      const response = await request(app.getHttpServer())
+        .patch(`/api/users/${analystUser.id}/role`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ role: UserRole.VIEWER })
+        .expect(200);
+
+      expect(mockUsersService.changeRoleForTenant).toHaveBeenCalledWith(
+        analystUser.id,
+        adminUser.tenantId,
+        UserRole.VIEWER,
+      );
+      expect(response.body).not.toHaveProperty('hashedPassword');
+    });
+
+    it('rejects an Admin changing their own role, without calling the service', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .patch(`/api/users/${adminUser.id}/role`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ role: UserRole.ANALYST })
+        .expect(403);
+      expect(mockUsersService.changeRoleForTenant).not.toHaveBeenCalled();
+    });
+
+    it('returns 409 when demoting the last remaining Admin', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.changeRoleForTenant.mockRejectedValue(
+        new ConflictException(
+          'Cannot demote the last remaining Admin in this tenant',
+        ),
+      );
+
+      await request(app.getHttpServer())
+        .patch(`/api/users/${analystUser.id}/role`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ role: UserRole.VIEWER })
+        .expect(409);
+    });
+
+    it('rejects a role outside the allowed set', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .patch(`/api/users/${analystUser.id}/role`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ role: UserRole.SUPER_ADMIN })
+        .expect(400);
+      expect(mockUsersService.changeRoleForTenant).not.toHaveBeenCalled();
+    });
+
+    it('rejects an Analyst', async () => {
+      const token = await loginAs(analystUser.email);
+
+      await request(app.getHttpServer())
+        .patch(`/api/users/${viewerUser.id}/role`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ role: UserRole.VIEWER })
+        .expect(403);
+    });
+  });
+
+  describe('DELETE /users/:id', () => {
+    it('allows an Admin to delete another user and returns a confirmation', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.removeUserForTenant.mockResolvedValue({
+        ...analystUser,
+        hashedPassword,
+      });
+
+      const response = await request(app.getHttpServer())
+        .delete(`/api/users/${analystUser.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(response.body).toEqual({
+        message: 'User deleted successfully',
+        id: analystUser.id,
+      });
+    });
+
+    it('rejects an Admin deleting their own account, without calling the service', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .delete(`/api/users/${adminUser.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      expect(mockUsersService.removeUserForTenant).not.toHaveBeenCalled();
+    });
+
+    it('rejects a Viewer', async () => {
+      const token = await loginAs(viewerUser.email);
+
+      await request(app.getHttpServer())
+        .delete(`/api/users/${analystUser.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+    });
+  });
+
+  describe('PATCH /users/me/password', () => {
+    it('allows any authenticated role to change their own password and returns a fresh token', async () => {
+      const token = await loginAs(viewerUser.email);
+      mockUsersService.changePassword.mockResolvedValue({
+        id: viewerUser.id,
+        role: viewerUser.role,
+        tenantId: viewerUser.tenantId,
+        mustChangePassword: false,
+      });
+
+      const response = await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: PASSWORD, newPassword: 'New-password1!' })
+        .expect(200);
+
+      expect(mockUsersService.changePassword).toHaveBeenCalledWith(
+        viewerUser.id,
+        PASSWORD,
+        'New-password1!',
+      );
+      expect(response.body).toEqual({
+        message: 'Password changed successfully',
+        access_token: expect.any(String),
+        mustChangePassword: false,
+      });
+    });
+
+    it('returns 401 when the current password is wrong', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.changePassword.mockRejectedValue(
+        new UnauthorizedException('Current password is incorrect'),
+      );
+
+      await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({
+          currentPassword: 'wrong-password',
+          newPassword: 'New-password1!',
+        })
+        .expect(401);
+    });
+
+    it('rejects a weak new password', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: PASSWORD, newPassword: 'weak' })
+        .expect(400);
+      expect(mockUsersService.changePassword).not.toHaveBeenCalled();
+    });
+
+    it('returns 409 when the new password reuses a recent one', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.changePassword.mockRejectedValue(
+        new ConflictException(
+          'New password must not match your current or last 5 passwords',
+        ),
+      );
+
+      await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: PASSWORD, newPassword: 'Old-password1!' })
+        .expect(409);
+    });
+
+    it('rejects a request with no token', () => {
+      return request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .send({ currentPassword: PASSWORD, newPassword: 'New-password1!' })
+        .expect(401);
+    });
+
+    it('works for a caller with no tenantId (no tenant guard on this route)', async () => {
+      const token = await loginAs(noTenantAdminUser.email);
+      mockUsersService.changePassword.mockResolvedValue({
+        id: noTenantAdminUser.id,
+        role: noTenantAdminUser.role,
+        tenantId: noTenantAdminUser.tenantId,
+        mustChangePassword: false,
+      });
+
+      await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: PASSWORD, newPassword: 'New-password1!' })
+        .expect(200);
+    });
+  });
+
+  describe('POST /users/:id/reset-password', () => {
+    it('allows an Admin to reset another user password', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.resetPasswordForTenant.mockResolvedValue(undefined);
+
+      const response = await request(app.getHttpServer())
+        .post(`/api/users/${analystUser.id}/reset-password`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ newPassword: 'New-password1!' })
+        .expect(201);
+
+      expect(mockUsersService.resetPasswordForTenant).toHaveBeenCalledWith(
+        analystUser.id,
+        adminUser.tenantId,
+        'New-password1!',
+      );
+      expect(response.body).toEqual({ message: 'Password reset successfully' });
+    });
+
+    it('rejects a weak new password', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .post(`/api/users/${analystUser.id}/reset-password`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ newPassword: 'weak' })
+        .expect(400);
+      expect(mockUsersService.resetPasswordForTenant).not.toHaveBeenCalled();
+    });
+
+    it('rejects an Analyst', async () => {
+      const token = await loginAs(analystUser.email);
+
+      await request(app.getHttpServer())
+        .post(`/api/users/${viewerUser.id}/reset-password`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ newPassword: 'New-password1!' })
+        .expect(403);
+    });
+
+    it('returns 409 when the new password reuses one the target has used before', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.resetPasswordForTenant.mockRejectedValue(
+        new ConflictException(
+          'New password must not match your current or last 5 passwords',
+        ),
+      );
+
+      await request(app.getHttpServer())
+        .post(`/api/users/${analystUser.id}/reset-password`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ newPassword: 'Old-password1!' })
+        .expect(409);
+    });
+
+    it('rejects an Admin targeting their own account, without calling the service', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .post(`/api/users/${adminUser.id}/reset-password`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ newPassword: 'New-password1!' })
+        .expect(403);
+      expect(mockUsersService.resetPasswordForTenant).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 when the target user does not exist in the tenant', async () => {
+      const token = await loginAs(adminUser.email);
+      mockUsersService.resetPasswordForTenant.mockRejectedValue(
+        new NotFoundException('User not found'),
+      );
+
+      await request(app.getHttpServer())
+        .post('/api/users/missing-id/reset-password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ newPassword: 'New-password1!' })
+        .expect(404);
+    });
+  });
+
+  describe('mustChangePassword enforcement', () => {
+    it('blocks a user with mustChangePassword from hitting a normal route', async () => {
+      const token = await loginAs(resetPendingUser.email);
+
+      await request(app.getHttpServer())
+        .get('/api/users/me')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+    });
+
+    it('still allows that same user to change their password', async () => {
+      const token = await loginAs(resetPendingUser.email);
+      mockUsersService.changePassword.mockResolvedValue({
+        id: resetPendingUser.id,
+        role: resetPendingUser.role,
+        tenantId: resetPendingUser.tenantId,
+        mustChangePassword: false,
+      });
+
+      await request(app.getHttpServer())
+        .patch('/api/users/me/password')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ currentPassword: PASSWORD, newPassword: 'New-password1!' })
+        .expect(200);
+    });
+
+    it('does not block a user whose mustChangePassword is false', async () => {
+      const token = await loginAs(analystUser.email);
+      mockUsersService.findByIdForTenant.mockResolvedValue({
+        ...analystUser,
+        hashedPassword,
+      });
+
+      await request(app.getHttpServer())
+        .get('/api/users/me')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+    });
+  });
+});
