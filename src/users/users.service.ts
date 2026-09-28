@@ -287,9 +287,22 @@ export class UsersService {
 
   // Escalation counterpart to hasPendingPasswordRequestsForAdmin: a tenant's first-created
   // Admin has no one else in-tenant to notify, so their own pending request surfaces to
-  // every Super Admin instead. Bounded by the (small) number of currently-pending Admins,
+  // every Super Admin instead — as does any Integration Admin's request. Bounded by the (small) number of currently-pending Admins,
   // not the total Admin count, so the N+1 lookup here is cheap in practice.
   async hasPendingPasswordRequestsForSuperAdmin(): Promise<boolean> {
+    // Integration Admins have no tenant, so no tenant Admin can see their
+    // request — Super Admins are their only reset path.
+    const pendingIntegrationAdmin = await this.prisma.user.findFirst({
+      where: {
+        role: UserRole.INTEGRATION_ADMIN,
+        passwordResetRequestedAt: { not: null },
+      },
+      select: { id: true },
+    });
+    if (pendingIntegrationAdmin) {
+      return true;
+    }
+
     const pendingAdmins = await this.prisma.user.findMany({
       where: { role: UserRole.ADMIN, passwordResetRequestedAt: { not: null } },
       select: { id: true, tenantId: true },

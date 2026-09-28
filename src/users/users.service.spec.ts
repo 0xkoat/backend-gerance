@@ -684,19 +684,38 @@ describe('UsersService', () => {
   });
 
   describe('hasPendingPasswordRequestsForSuperAdmin', () => {
-    it('returns false when no Admin has a pending request', async () => {
-      mockPrismaService.user.findMany.mockResolvedValue([]);
+    it('returns false when no Admin or Integration Admin has a pending request', async () => {
+      mockPrismaService.user.findFirst.mockResolvedValueOnce(null);
+      mockPrismaService.user.findMany.mockResolvedValueOnce([]);
 
       const result = await service.hasPendingPasswordRequestsForSuperAdmin();
 
       expect(result).toBe(false);
     });
 
+    it('returns true when an Integration Admin has a pending request, without checking tenant Admins', async () => {
+      mockPrismaService.user.findFirst.mockResolvedValueOnce({ id: 'ia-1' });
+
+      const result = await service.hasPendingPasswordRequestsForSuperAdmin();
+
+      expect(result).toBe(true);
+      expect(mockPrismaService.user.findFirst).toHaveBeenCalledWith({
+        where: {
+          role: UserRole.INTEGRATION_ADMIN,
+          passwordResetRequestedAt: { not: null },
+        },
+        select: { id: true },
+      });
+      expect(mockPrismaService.user.findMany).not.toHaveBeenCalled();
+    });
+
     it("returns true when a pending Admin is their tenant's first-created Admin", async () => {
-      mockPrismaService.user.findMany.mockResolvedValue([
+      mockPrismaService.user.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'admin-1' });
+      mockPrismaService.user.findMany.mockResolvedValueOnce([
         { id: 'admin-1', tenantId: 'tenant-1' },
       ]);
-      mockPrismaService.user.findFirst.mockResolvedValue({ id: 'admin-1' });
 
       const result = await service.hasPendingPasswordRequestsForSuperAdmin();
 
@@ -704,10 +723,12 @@ describe('UsersService', () => {
     });
 
     it('returns false when the pending Admin is a co-Admin, not the first-created one (handled by the tenant Admin path instead)', async () => {
-      mockPrismaService.user.findMany.mockResolvedValue([
+      mockPrismaService.user.findFirst
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'admin-1' });
+      mockPrismaService.user.findMany.mockResolvedValueOnce([
         { id: 'co-admin-2', tenantId: 'tenant-1' },
       ]);
-      mockPrismaService.user.findFirst.mockResolvedValue({ id: 'admin-1' });
 
       const result = await service.hasPendingPasswordRequestsForSuperAdmin();
 
