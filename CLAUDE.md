@@ -11,9 +11,44 @@ See root `CLAUDE.md` for overall project context.
 # Architecture decisions
 
 - Shared-database multi-tenancy with `tenant_id` isolation on relevant tables/queries
-- Unified `SecurityModule` contract interface that each security module (SIEM, SOAR, CTI,
-  EDR, DFIR, VM) implements, for consistency across the platform
+- ~~Unified `SecurityModule` contract interface that each security module (SIEM, SOAR, CTI,
+  EDR, DFIR, VM) implements, for consistency across the platform~~ Removed 2026-09-28, see
+  "v2 redesign" below.
 - Redis deferred — don't introduce it unless there's a clear need
+
+# v2 redesign (supervisor-requested, started 2026-09-28, branch `v2`)
+
+After the project was demoed to the supervisor, the security modules were redefined: SIEM,
+SOAR, CTI, EDR, DFIR and VM are real external platforms (Splunk, Wazuh, etc.), one shared
+instance per module, on private IP:PORT addresses. The platform only launches a user into
+them (redirect carrying the login), it no longer ingests, stores or shows their data.
+
+Planned phases: (1) remove the module data layer, (2) roles: `INTEGRATION_ADMIN`
+(platform-wide, created by Super Admin, only edits module IP/port and receives Module
+tickets), analyst levels L1/L2/L3, `VIEWER` removed, (3) module endpoint registry + launch,
+(4) ticketing + notifications, (5) seed/tests/docs/README alignment.
+
+**Phase 1 done 2026-09-28** (commits `d1ace4c`, `2b0fb7a`, `1818e8b`):
+- Deleted `src/{siem,soar,cti,edr,dfir,vm,asset,polling}/`, `src/common/security-module/`,
+  `src/common/assignment.ts`, `src/common/dto/{assign,base-query}.dto.ts`, and their unit
+  and e2e specs.
+- Migration `20260928074217_remove_module_data_layer` drops the 12 module tables and 9
+  enums (incl. `Severity`). `TenantModule`/`ModuleName` are kept; Phase 3 turns them into
+  the endpoint registry.
+- `UsersService.removeUserForTenant` / `TenantsService.deleteTenantWithUsers` no longer
+  touch the dropped tables. `seed:demo` (`prisma/seed-modules.ts`) now seeds only tenants,
+  users and `TenantModule` rows; since faker's call sequence changed, tenants 2-5 get new
+  identities on the next fresh seed (tenant 1 is unchanged).
+- `EventsService` keeps the authenticated SSE plumbing with an empty `STREAMED_EVENTS`
+  list (`NEVER` keeps the stream open), intended for Phase 4 notifications.
+- `@nestjs/schedule` stays: `AuthService`'s nightly refresh-token cleanup cron uses it.
+- Verified: 186 unit / 80 e2e passing, `tsc` clean, live checks against the dev stack
+  (removed routes 404, SSE stays open, user and tenant deletion with real auth history).
+
+Every section below that describes the six modules, the orchestration chain, the asset
+feed, the MockAdapter poller or the "Module implementation plan" is **historical** — it
+documents what was built and then removed, kept for the internship record. Don't treat it
+as current.
 
 # Security modules — architecture spec (built — see "Module implementation plan" below)
 
