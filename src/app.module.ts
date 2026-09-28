@@ -5,6 +5,7 @@ import { AuthModule } from './auth/auth.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { HealthModule } from './health/health.module';
 import { EventsModule } from './events/events.module';
+import { ModuleAccessModule } from './module-access/module-access.module';
 import { APP_GUARD } from '@nestjs/core';
 import { RolesGuard } from './auth/guards/roles.guard';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
@@ -32,6 +33,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     TenantsModule,
     HealthModule,
     EventsModule,
+    ModuleAccessModule,
     ThrottlerModule.forRoot([{ ttl: 60000, limit: 10 }]),
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),
