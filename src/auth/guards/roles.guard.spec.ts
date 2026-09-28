@@ -28,7 +28,7 @@ describe('RolesGuard', () => {
   it('allows access when the route has no @Roles() metadata', () => {
     jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue(undefined);
 
-    const result = guard.canActivate(buildContext({ role: UserRole.VIEWER }));
+    const result = guard.canActivate(buildContext({ role: UserRole.ANALYST }));
 
     expect(result).toBe(true);
   });
@@ -51,7 +51,7 @@ describe('RolesGuard', () => {
       .mockReturnValue([UserRole.ADMIN]);
 
     const result = guard.canActivate(
-      buildContext({ userId: '1', role: UserRole.VIEWER, tenantId: 't1' }),
+      buildContext({ userId: '1', role: UserRole.ANALYST, tenantId: 't1' }),
     );
 
     expect(result).toBe(false);

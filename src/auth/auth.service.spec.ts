@@ -6,7 +6,7 @@ import { createHash } from 'crypto';
 import { AuthService } from './auth.service';
 import { UsersService } from '../users/users.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { UserRole } from '../generated/prisma/client';
+import { AnalystLevel, UserRole } from '../generated/prisma/client';
 
 jest.mock('argon2');
 
@@ -258,6 +258,7 @@ describe('AuthService', () => {
       name: 'Bob',
       phoneNumber: '+21612345678',
       role: UserRole.ANALYST,
+      analystLevel: AnalystLevel.L1,
       tenantId: 'tenant-1',
       mustChangePassword: false,
       passwordResetRequestedAt: null,
@@ -289,6 +290,7 @@ describe('AuthService', () => {
         ...safeUser,
         id: '2',
         role: UserRole.SUPER_ADMIN,
+        analystLevel: null,
         tenantId: null,
       };
       mockJwtService.sign.mockReturnValue('signed-jwt');

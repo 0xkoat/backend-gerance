@@ -8,7 +8,11 @@ import * as argon2 from 'argon2';
 import { faker } from '@faker-js/faker';
 import { PrismaClient } from '../src/generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
-import { UserRole, ModuleName } from '../src/generated/prisma/enums';
+import {
+  AnalystLevel,
+  UserRole,
+  ModuleName,
+} from '../src/generated/prisma/enums';
 
 const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
@@ -16,10 +20,6 @@ const prisma = new PrismaClient({
 
 const TENANT_COUNT = 5;
 const SHARED_PASSWORD = 'DemoPassw0rd!2026';
-const PER_TENANT = {
-  analysts: 3,
-  viewers: 3,
-};
 
 function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -29,6 +29,7 @@ interface SeedCredential {
   tenantName: string;
   email: string;
   role: UserRole;
+  analystLevel: AnalystLevel | null;
 }
 
 const usedEmails = new Set<string>();
@@ -65,19 +66,20 @@ async function seedTenant(
 
   const credentials: SeedCredential[] = [];
 
-  // ---- Users: 1 first Admin, 1 co-Admin, N Analysts, N Viewers.
+  // ---- Users: 1 first Admin, 1 co-Admin, one Analyst per level.
   const userRows: Array<{
     id: string;
     email: string;
     phoneNumber: string;
     name: string;
     role: UserRole;
+    analystLevel: AnalystLevel | null;
     hashedPassword: string;
     tenantId: string;
     mustChangePassword: boolean;
   }> = [];
 
-  function addUser(role: UserRole) {
+  function addUser(role: UserRole, analystLevel: AnalystLevel | null = null) {
     const email = uniqueEmail(tenantSlug, role.toLowerCase());
     const id = randomUUID();
     userRows.push({
@@ -86,19 +88,21 @@ async function seedTenant(
       phoneNumber: phoneNumber(),
       name: faker.person.fullName(),
       role,
+      analystLevel,
       hashedPassword,
       tenantId: tenant.id,
       // Seed-script bootstrap, same precedent as the Super Admin seed in
       // seed.ts — not the API path the mustChangePassword hard rule targets.
       mustChangePassword: false,
     });
-    credentials.push({ tenantName, email, role });
+    credentials.push({ tenantName, email, role, analystLevel });
   }
 
   addUser(UserRole.ADMIN);
   addUser(UserRole.ADMIN);
-  for (let i = 0; i < PER_TENANT.analysts; i++) addUser(UserRole.ANALYST);
-  for (let i = 0; i < PER_TENANT.viewers; i++) addUser(UserRole.VIEWER);
+  for (const level of Object.values(AnalystLevel)) {
+    addUser(UserRole.ANALYST, level);
+  }
 
   await prisma.user.createMany({ data: userRows });
 
@@ -144,7 +148,10 @@ async function main() {
       currentTenant = cred.tenantName;
       console.log(`\n${currentTenant}`);
     }
-    console.log(`  [${cred.role.padEnd(7)}] ${cred.email}`);
+    const label = cred.analystLevel
+      ? `${cred.role} ${cred.analystLevel}`
+      : cred.role;
+    console.log(`  [${label.padEnd(10)}] ${cred.email}`);
   }
   console.log(`\nTotal accounts seeded: ${allCredentials.length}`);
 }

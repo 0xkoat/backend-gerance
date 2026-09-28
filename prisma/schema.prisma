@@ -34,9 +34,18 @@ model Tenant {
 
 enum UserRole {
   SUPER_ADMIN
+  INTEGRATION_ADMIN
   ADMIN
   ANALYST
-  VIEWER
+}
+
+// Required for ANALYST, NULL for every other role — enforced by the
+// User_analystLevel_matches_role CHECK constraint (raw SQL in the migration,
+// Prisma schema can't express it).
+enum AnalystLevel {
+  L1
+  L2
+  L3
 }
 
 model User {
@@ -44,7 +53,8 @@ model User {
   email                    String            @unique
   phoneNumber              String
   name                     String
-  role                     UserRole          @default(VIEWER)
+  role                     UserRole
+  analystLevel             AnalystLevel?
   hashedPassword           String
   tenantId                 String?           @db.Uuid
   tenant                   Tenant?           @relation(fields: [tenantId], references: [id])

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -6,7 +7,7 @@ import {
   NotFoundException,
   UnauthorizedException,
 } from '@nestjs/common';
-import { Prisma, UserRole } from '../generated/prisma/client';
+import { AnalystLevel, Prisma, UserRole } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateUserDto } from './dto/createUser.dto';
 import { UpdateUserDto } from './dto/updateUser.dto';
@@ -15,6 +16,27 @@ import * as argon2 from 'argon2';
 // Checked against the current password plus this many prior ones — "last 5
 // passwords" total, including the one about to be replaced.
 const PASSWORD_HISTORY_CHECK_LIMIT = 4;
+
+// Every ANALYST has a level and no other role has one. The database enforces
+// the same rule (User_analystLevel_matches_role CHECK), this turns a
+// violation into a 400 instead of a constraint-error 500.
+function resolveAnalystLevel(
+  role: UserRole,
+  analystLevel: AnalystLevel | undefined,
+): AnalystLevel | null {
+  if (role === UserRole.ANALYST) {
+    if (!analystLevel) {
+      throw new BadRequestException('analystLevel is required for an Analyst');
+    }
+    return analystLevel;
+  }
+  if (analystLevel) {
+    throw new BadRequestException(
+      'analystLevel is only allowed for an Analyst',
+    );
+  }
+  return null;
+}
 
 @Injectable()
 export class UsersService {
@@ -68,12 +90,14 @@ export class UsersService {
     createUserDto: CreateUserDto,
     role: UserRole,
     tenantId: string | null,
+    analystLevel?: AnalystLevel,
   ) {
     if (role === UserRole.SUPER_ADMIN) {
       throw new ForbiddenException(
         'Super Admin cannot be created through the API',
       );
     }
+    const level = resolveAnalystLevel(role, analystLevel);
 
     const { password, ...rest } = createUserDto;
     const hashedPassword = await argon2.hash(password);
@@ -84,6 +108,7 @@ export class UsersService {
           ...rest,
           hashedPassword,
           role,
+          analystLevel: level,
           tenantId,
           mustChangePassword: true,
         },
@@ -149,7 +174,13 @@ export class UsersService {
   // Every tenant must always have at least one Admin. Demoting the last one
   // is rejected outright rather than silently leaving the tenant with no one
   // able to administer it.
-  async changeRoleForTenant(id: string, tenantId: string, role: UserRole) {
+  async changeRoleForTenant(
+    id: string,
+    tenantId: string,
+    role: UserRole,
+    analystLevel?: AnalystLevel,
+  ) {
+    const level = resolveAnalystLevel(role, analystLevel);
     const user = await this.findByIdForTenant(id, tenantId);
 
     if (user.role === UserRole.ADMIN && role !== UserRole.ADMIN) {
@@ -166,7 +197,7 @@ export class UsersService {
 
     return this.prisma.user.update({
       where: { id },
-      data: { role },
+      data: { role, analystLevel: level },
     });
   }
 

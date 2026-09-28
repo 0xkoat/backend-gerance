@@ -13,9 +13,9 @@ const mockEventsService = {
 describe('EventsController', () => {
   let controller: EventsController;
 
-  const viewer: AuthenticatedUser = {
+  const analyst: AuthenticatedUser = {
     userId: 'user-1',
-    role: UserRole.VIEWER,
+    role: UserRole.ANALYST,
     tenantId: 'tenant-1',
     mustChangePassword: false,
   };
@@ -47,7 +47,7 @@ describe('EventsController', () => {
       const stream$ = of({ data: { tenantId: 'tenant-1' } });
       mockEventsService.streamForTenant.mockReturnValue(stream$);
 
-      const result = controller.stream(viewer);
+      const result = controller.stream(analyst);
 
       expect(mockEventsService.streamForTenant).toHaveBeenCalledWith(
         'tenant-1',

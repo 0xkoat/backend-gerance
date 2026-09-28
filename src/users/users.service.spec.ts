@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Logger,
@@ -9,7 +10,7 @@ import {
 import * as argon2 from 'argon2';
 import { UsersService } from './users.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { Prisma, UserRole } from '../generated/prisma/client';
+import { AnalystLevel, Prisma, UserRole } from '../generated/prisma/client';
 import { CreateUserDto } from './dto/createUser.dto';
 import { UpdateUserDto } from './dto/updateUser.dto';
 
@@ -176,6 +177,7 @@ describe('UsersService', () => {
         dto,
         UserRole.ANALYST,
         'tenant-1',
+        AnalystLevel.L2,
       );
 
       expect(argon2.hash).toHaveBeenCalledWith(dto.password);
@@ -186,11 +188,26 @@ describe('UsersService', () => {
           phoneNumber: dto.phoneNumber,
           hashedPassword: 'hashed-password',
           role: UserRole.ANALYST,
+          analystLevel: AnalystLevel.L2,
           tenantId: 'tenant-1',
           mustChangePassword: true,
         },
       });
       expect(result).toEqual(createdUser);
+    });
+
+    it('rejects an Analyst without a level, without touching the database', async () => {
+      await expect(
+        service.createUser(dto, UserRole.ANALYST, 'tenant-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrismaService.user.create).not.toHaveBeenCalled();
+    });
+
+    it('rejects a level on a non-Analyst role, without touching the database', async () => {
+      await expect(
+        service.createUser(dto, UserRole.ADMIN, 'tenant-1', AnalystLevel.L1),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrismaService.user.create).not.toHaveBeenCalled();
     });
 
     it('rejects creating a SUPER_ADMIN through this method, without touching the database', async () => {
@@ -224,7 +241,7 @@ describe('UsersService', () => {
       );
 
       await expect(
-        service.createUser(dto, UserRole.VIEWER, 'tenant-1'),
+        service.createUser(dto, UserRole.ADMIN, 'tenant-1'),
       ).rejects.toThrow(ConflictException);
       expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(dto.email));
       warnSpy.mockRestore();
@@ -235,7 +252,7 @@ describe('UsersService', () => {
       mockPrismaService.user.create.mockRejectedValue(unexpected);
 
       await expect(
-        service.createUser(dto, UserRole.VIEWER, 'tenant-1'),
+        service.createUser(dto, UserRole.ADMIN, 'tenant-1'),
       ).rejects.toThrow('database connection lost');
     });
   });
@@ -353,26 +370,28 @@ describe('UsersService', () => {
   });
 
   describe('changeRoleForTenant', () => {
-    it('changes the role when the target is not an Admin', async () => {
+    it("changes an Analyst's level without checking the admin count", async () => {
       const existingUser = {
         id: '1',
         tenantId: 'tenant-1',
         role: UserRole.ANALYST,
+        analystLevel: AnalystLevel.L1,
       };
-      const updatedUser = { ...existingUser, role: UserRole.VIEWER };
+      const updatedUser = { ...existingUser, analystLevel: AnalystLevel.L3 };
       mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
       mockPrismaService.user.update.mockResolvedValue(updatedUser);
 
       const result = await service.changeRoleForTenant(
         '1',
         'tenant-1',
-        UserRole.VIEWER,
+        UserRole.ANALYST,
+        AnalystLevel.L3,
       );
 
       expect(mockPrismaService.user.count).not.toHaveBeenCalled();
       expect(mockPrismaService.user.update).toHaveBeenCalledWith({
         where: { id: '1' },
-        data: { role: UserRole.VIEWER },
+        data: { role: UserRole.ANALYST, analystLevel: AnalystLevel.L3 },
       });
       expect(result).toEqual(updatedUser);
     });
@@ -394,7 +413,7 @@ describe('UsersService', () => {
       expect(mockPrismaService.user.count).not.toHaveBeenCalled();
       expect(mockPrismaService.user.update).toHaveBeenCalledWith({
         where: { id: '1' },
-        data: { role: UserRole.ADMIN },
+        data: { role: UserRole.ADMIN, analystLevel: null },
       });
     });
 
@@ -411,14 +430,19 @@ describe('UsersService', () => {
         role: UserRole.ANALYST,
       });
 
-      await service.changeRoleForTenant('1', 'tenant-1', UserRole.ANALYST);
+      await service.changeRoleForTenant(
+        '1',
+        'tenant-1',
+        UserRole.ANALYST,
+        AnalystLevel.L1,
+      );
 
       expect(mockPrismaService.user.count).toHaveBeenCalledWith({
         where: { tenantId: 'tenant-1', role: UserRole.ADMIN },
       });
       expect(mockPrismaService.user.update).toHaveBeenCalledWith({
         where: { id: '1' },
-        data: { role: UserRole.ANALYST },
+        data: { role: UserRole.ANALYST, analystLevel: AnalystLevel.L1 },
       });
     });
 
@@ -432,8 +456,33 @@ describe('UsersService', () => {
       mockPrismaService.user.count.mockResolvedValue(1);
 
       await expect(
-        service.changeRoleForTenant('1', 'tenant-1', UserRole.ANALYST),
+        service.changeRoleForTenant(
+          '1',
+          'tenant-1',
+          UserRole.ANALYST,
+          AnalystLevel.L1,
+        ),
       ).rejects.toThrow(ConflictException);
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects moving to Analyst without a level, before any lookup', async () => {
+      await expect(
+        service.changeRoleForTenant('1', 'tenant-1', UserRole.ANALYST),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrismaService.user.findUnique).not.toHaveBeenCalled();
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
+
+    it('rejects a level when moving to Admin', async () => {
+      await expect(
+        service.changeRoleForTenant(
+          '1',
+          'tenant-1',
+          UserRole.ADMIN,
+          AnalystLevel.L2,
+        ),
+      ).rejects.toThrow(BadRequestException);
       expect(mockPrismaService.user.update).not.toHaveBeenCalled();
     });
 
@@ -441,7 +490,7 @@ describe('UsersService', () => {
       mockPrismaService.user.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.changeRoleForTenant('missing-id', 'tenant-1', UserRole.VIEWER),
+        service.changeRoleForTenant('missing-id', 'tenant-1', UserRole.ADMIN),
       ).rejects.toThrow(NotFoundException);
       expect(mockPrismaService.user.update).not.toHaveBeenCalled();
     });
@@ -454,7 +503,7 @@ describe('UsersService', () => {
       });
 
       await expect(
-        service.changeRoleForTenant('1', 'tenant-1', UserRole.VIEWER),
+        service.changeRoleForTenant('1', 'tenant-1', UserRole.ADMIN),
       ).rejects.toThrow(NotFoundException);
       expect(mockPrismaService.user.update).not.toHaveBeenCalled();
     });
@@ -853,13 +902,13 @@ describe('UsersService', () => {
 
     it('throws NotFoundException when the target is not an Admin', async () => {
       mockPrismaService.user.findUnique.mockResolvedValue({
-        id: 'viewer-1',
-        role: UserRole.VIEWER,
+        id: 'analyst-1',
+        role: UserRole.ANALYST,
         tenantId: 'tenant-1',
       });
 
       await expect(
-        service.resetSoleAdminPassword('viewer-1', 'New-password1!'),
+        service.resetSoleAdminPassword('analyst-1', 'New-password1!'),
       ).rejects.toThrow(NotFoundException);
       expect(mockPrismaService.user.count).not.toHaveBeenCalled();
       expect(mockPrismaService.user.update).not.toHaveBeenCalled();

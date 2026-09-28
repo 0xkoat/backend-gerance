@@ -8,7 +8,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
-import { UserRole } from '../generated/prisma/enums';
+import { AnalystLevel, UserRole } from '../generated/prisma/enums';
 import type { AuthenticatedUser } from '../auth/jwt.strategy';
 import { CreateSubordinateUserDto } from './dto/createSubordinateUser.dto';
 import { UpdateUserDto } from './dto/updateUser.dto';
@@ -119,18 +119,21 @@ describe('UsersController', () => {
       password: 'Str0ng!Passw0rd',
       phoneNumber: '+21612345678',
       role: UserRole.ANALYST,
+      analystLevel: AnalystLevel.L2,
     };
 
-    it('creates a user in the caller tenant with the role from the DTO, without the hashed password', async () => {
+    it('creates a user in the caller tenant with the role and level from the DTO, without the hashed password', async () => {
       const createdUser = { ...dbUser, ...dto };
       mockUsersService.createUser.mockResolvedValue(createdUser);
 
       const result = await controller.createUser(admin, dto);
 
+      const { role: _role, analystLevel: _level, ...userFields } = dto;
       expect(mockUsersService.createUser).toHaveBeenCalledWith(
-        dto,
+        userFields,
         UserRole.ANALYST,
         'tenant-1',
+        AnalystLevel.L2,
       );
       expect(result).not.toHaveProperty('hashedPassword');
     });
@@ -288,12 +291,16 @@ describe('UsersController', () => {
   });
 
   describe('updateUserRoleById', () => {
-    const dto: ChangeUserRoleDto = { role: UserRole.VIEWER };
+    const dto: ChangeUserRoleDto = {
+      role: UserRole.ANALYST,
+      analystLevel: AnalystLevel.L3,
+    };
 
-    it('changes the role of another user in the tenant', async () => {
+    it('changes the role and level of another user in the tenant', async () => {
       mockUsersService.changeRoleForTenant.mockResolvedValue({
         ...dbUser,
-        role: UserRole.VIEWER,
+        role: UserRole.ANALYST,
+        analystLevel: AnalystLevel.L3,
       });
 
       const result = await controller.updateUserRoleById(admin, 'user-1', dto);
@@ -301,7 +308,8 @@ describe('UsersController', () => {
       expect(mockUsersService.changeRoleForTenant).toHaveBeenCalledWith(
         'user-1',
         'tenant-1',
-        UserRole.VIEWER,
+        UserRole.ANALYST,
+        AnalystLevel.L3,
       );
       expect(result).not.toHaveProperty('hashedPassword');
     });

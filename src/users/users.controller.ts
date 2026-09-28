@@ -121,8 +121,8 @@ export class UsersController {
   // tenantId comes from the caller's own token, never the request body. An
   // Admin can only ever create users inside their own tenant. role does come
   // from the body here, but CreateSubordinateUserDto only allows
-  // ADMIN/ANALYST/VIEWER, matching the "Admin can create co-Admin, Analyst,
-  // or Viewer" provisioning rule.
+  // ADMIN/ANALYST, matching the "Admin can create co-Admin or Analyst"
+  // provisioning rule.
   @Roles(UserRole.ADMIN)
   @Post()
   async createUser(
@@ -133,10 +133,12 @@ export class UsersController {
       throw new ForbiddenException('This account is not scoped to a tenant');
     }
 
+    const { role, analystLevel, ...userFields } = createSubordinateUserDto;
     const createdUser = await this.usersService.createUser(
-      createSubordinateUserDto,
-      createSubordinateUserDto.role,
+      userFields,
+      role,
       user.tenantId,
+      analystLevel,
     );
 
     const { hashedPassword: _hashedPassword, ...safeUser } = createdUser;
@@ -233,6 +235,7 @@ export class UsersController {
       id,
       user.tenantId,
       changeUserRoleDto.role,
+      changeUserRoleDto.analystLevel,
     );
     const { hashedPassword: _hashedPassword, ...safeUser } = updatedUser;
 

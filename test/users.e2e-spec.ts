@@ -12,7 +12,7 @@ import * as argon2 from 'argon2';
 import { AppModule } from './../src/app.module';
 import { UsersService } from './../src/users/users.service';
 import { PrismaService } from './../src/prisma/prisma.service';
-import { UserRole } from './../src/generated/prisma/enums';
+import { AnalystLevel, UserRole } from './../src/generated/prisma/enums';
 
 describe('UsersController (e2e)', () => {
   let app: INestApplication<App>;
@@ -50,13 +50,13 @@ describe('UsersController (e2e)', () => {
     mustChangePassword: false,
   };
 
-  const viewerUser: FakeUser = {
-    id: 'viewer-1',
-    email: 'viewer@x.com',
-    name: 'Viewer',
+  const integrationAdminUser: FakeUser = {
+    id: 'integration-admin-1',
+    email: 'integration-admin@x.com',
+    name: 'Integration Admin',
     phoneNumber: '+21612345680',
-    role: UserRole.VIEWER,
-    tenantId: 'tenant-1',
+    role: UserRole.INTEGRATION_ADMIN,
+    tenantId: null,
     mustChangePassword: false,
   };
 
@@ -83,7 +83,7 @@ describe('UsersController (e2e)', () => {
   const usersByEmail: Record<string, FakeUser> = {
     [adminUser.email]: adminUser,
     [analystUser.email]: analystUser,
-    [viewerUser.email]: viewerUser,
+    [integrationAdminUser.email]: integrationAdminUser,
     [noTenantAdminUser.email]: noTenantAdminUser,
     [resetPendingUser.email]: resetPendingUser,
   };
@@ -189,6 +189,7 @@ describe('UsersController (e2e)', () => {
       password: 'Str0ng!Passw0rd',
       phoneNumber: '+21620345699',
       role: UserRole.ANALYST,
+      analystLevel: AnalystLevel.L2,
     };
 
     it('allows an Admin to create a user in their own tenant', async () => {
@@ -210,6 +211,7 @@ describe('UsersController (e2e)', () => {
         expect.objectContaining({ email: createBody.email }),
         UserRole.ANALYST,
         adminUser.tenantId,
+        AnalystLevel.L2,
       );
       expect(response.body).not.toHaveProperty('hashedPassword');
     });
@@ -225,8 +227,8 @@ describe('UsersController (e2e)', () => {
       expect(mockUsersService.createUser).not.toHaveBeenCalled();
     });
 
-    it('rejects a Viewer attempting to create a user', async () => {
-      const token = await loginAs(viewerUser.email);
+    it('rejects an Integration Admin attempting to create a user', async () => {
+      const token = await loginAs(integrationAdminUser.email);
 
       await request(app.getHttpServer())
         .post('/api/users')
@@ -312,8 +314,8 @@ describe('UsersController (e2e)', () => {
       );
     });
 
-    it('rejects a Viewer', async () => {
-      const token = await loginAs(viewerUser.email);
+    it('rejects an Integration Admin', async () => {
+      const token = await loginAs(integrationAdminUser.email);
 
       await request(app.getHttpServer())
         .get('/api/users')
@@ -390,8 +392,8 @@ describe('UsersController (e2e)', () => {
       expect(mockUsersService.updateUserForTenant).not.toHaveBeenCalled();
     });
 
-    it('rejects a Viewer', async () => {
-      const token = await loginAs(viewerUser.email);
+    it('rejects an Integration Admin', async () => {
+      const token = await loginAs(integrationAdminUser.email);
 
       await request(app.getHttpServer())
         .patch(`/api/users/${analystUser.id}`)
@@ -406,20 +408,21 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(adminUser.email);
       mockUsersService.changeRoleForTenant.mockResolvedValue({
         ...analystUser,
-        role: UserRole.VIEWER,
+        analystLevel: AnalystLevel.L3,
         hashedPassword,
       });
 
       const response = await request(app.getHttpServer())
         .patch(`/api/users/${analystUser.id}/role`)
         .set('Authorization', `Bearer ${token}`)
-        .send({ role: UserRole.VIEWER })
+        .send({ role: UserRole.ANALYST, analystLevel: AnalystLevel.L3 })
         .expect(200);
 
       expect(mockUsersService.changeRoleForTenant).toHaveBeenCalledWith(
         analystUser.id,
         adminUser.tenantId,
-        UserRole.VIEWER,
+        UserRole.ANALYST,
+        AnalystLevel.L3,
       );
       expect(response.body).not.toHaveProperty('hashedPassword');
     });
@@ -446,8 +449,19 @@ describe('UsersController (e2e)', () => {
       await request(app.getHttpServer())
         .patch(`/api/users/${analystUser.id}/role`)
         .set('Authorization', `Bearer ${token}`)
-        .send({ role: UserRole.VIEWER })
+        .send({ role: UserRole.ANALYST, analystLevel: AnalystLevel.L1 })
         .expect(409);
+    });
+
+    it('rejects an invalid analyst level', async () => {
+      const token = await loginAs(adminUser.email);
+
+      await request(app.getHttpServer())
+        .patch(`/api/users/${analystUser.id}/role`)
+        .set('Authorization', `Bearer ${token}`)
+        .send({ role: UserRole.ANALYST, analystLevel: 'L4' })
+        .expect(400);
+      expect(mockUsersService.changeRoleForTenant).not.toHaveBeenCalled();
     });
 
     it('rejects a role outside the allowed set', async () => {
@@ -465,9 +479,9 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(analystUser.email);
 
       await request(app.getHttpServer())
-        .patch(`/api/users/${viewerUser.id}/role`)
+        .patch(`/api/users/${integrationAdminUser.id}/role`)
         .set('Authorization', `Bearer ${token}`)
-        .send({ role: UserRole.VIEWER })
+        .send({ role: UserRole.ADMIN })
         .expect(403);
     });
   });
@@ -501,8 +515,8 @@ describe('UsersController (e2e)', () => {
       expect(mockUsersService.removeUserForTenant).not.toHaveBeenCalled();
     });
 
-    it('rejects a Viewer', async () => {
-      const token = await loginAs(viewerUser.email);
+    it('rejects an Integration Admin', async () => {
+      const token = await loginAs(integrationAdminUser.email);
 
       await request(app.getHttpServer())
         .delete(`/api/users/${analystUser.id}`)
@@ -513,11 +527,11 @@ describe('UsersController (e2e)', () => {
 
   describe('PATCH /users/me/password', () => {
     it('allows any authenticated role to change their own password and returns a fresh token', async () => {
-      const token = await loginAs(viewerUser.email);
+      const token = await loginAs(integrationAdminUser.email);
       mockUsersService.changePassword.mockResolvedValue({
-        id: viewerUser.id,
-        role: viewerUser.role,
-        tenantId: viewerUser.tenantId,
+        id: integrationAdminUser.id,
+        role: integrationAdminUser.role,
+        tenantId: integrationAdminUser.tenantId,
         mustChangePassword: false,
       });
 
@@ -528,7 +542,7 @@ describe('UsersController (e2e)', () => {
         .expect(200);
 
       expect(mockUsersService.changePassword).toHaveBeenCalledWith(
-        viewerUser.id,
+        integrationAdminUser.id,
         PASSWORD,
         'New-password1!',
       );
@@ -639,7 +653,7 @@ describe('UsersController (e2e)', () => {
       const token = await loginAs(analystUser.email);
 
       await request(app.getHttpServer())
-        .post(`/api/users/${viewerUser.id}/reset-password`)
+        .post(`/api/users/${integrationAdminUser.id}/reset-password`)
         .set('Authorization', `Bearer ${token}`)
         .send({ newPassword: 'New-password1!' })
         .expect(403);
