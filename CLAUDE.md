@@ -67,6 +67,25 @@ tickets), analyst levels L1/L2/L3, `VIEWER` removed, (3) module endpoint registr
 - Known pre-existing issue, not from v2: `tsc -p test/tsconfig.json` reports
   `auth.e2e-spec.ts(123)` `increment` on `never` (confirmed at the pre-Phase-2 commit).
 
+**Phase 3 done 2026-09-28** (commits `2de03b8`, `9f379cb`): module endpoints and launch.
+- `ModuleEndpoint` (one row per module, platform-wide, unconfigured until host/port are set;
+  port range CHECK), `TenantModule.minAnalystLevel` (replaces the removed `config`; defaults
+  L1: CTI, VM / L2: SIEM, EDR / L3: SOAR, DFIR via `module-access/module-levels.ts`),
+  `ModuleLaunch` audit (snapshot columns, no FKs, survives user/tenant deletion).
+- `src/module-access/`: `/module-endpoints` (Integration Admin edits + TCP "test connection"
+  via `ConnectionProbe`; Super Admin read-only) and `/modules` (Admin/Analyst list, launch,
+  last 50 launches; tenant Admin sets per-module min level). Analysts only see modules their
+  level allows; launch re-reads role/level from the DB and records a `ModuleLaunch`.
+- **Launch is a plain redirect (Option 1): no credentials are carried to the module.** SSO
+  (platform as OIDC provider, or joining the supervisor's existing IdP) waits until the
+  products behind each module are known. Never forward or store user passwords for modules.
+- **D3 is provisional**: tenant Admin sets levels, Super Admin activates modules; the user is
+  confirming this split with the supervisor.
+- The connection test runs from the backend host, so the backend must be able to reach the
+  modules' private network (and users' browsers too, for the redirect) — matters for Azure.
+- Verified: 230 unit / 105 e2e, plus a live walkthrough (reachable vs ECONNREFUSED probe,
+  L1 Analyst refused SIEM then allowed after the Admin lowered it, launch log recorded).
+
 Every section below that describes the six modules, the orchestration chain, the asset
 feed, the MockAdapter poller or the "Module implementation plan" is **historical** — it
 documents what was built and then removed, kept for the internship record. Don't treat it
