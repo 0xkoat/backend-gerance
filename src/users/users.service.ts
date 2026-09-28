@@ -256,7 +256,7 @@ export class UsersService {
   // Single designated recipient per tenant: the earliest-created Admin (by createdAt),
   // computed live rather than stored, so it stays correct if that Admin is later deleted.
   // That Admin's own request is deliberately excluded here — it escalates to Super Admins
-  // instead (see hasPendingPasswordRequestsForSuperAdmin) rather than pinging themselves.
+  // instead (see pendingPasswordRequestsForSuperAdmin) rather than pinging themselves.
   async hasPendingPasswordRequestsForAdmin(
     adminId: string,
     tenantId: string,
@@ -289,20 +289,33 @@ export class UsersService {
   // Admin has no one else in-tenant to notify, so their own pending request surfaces to
   // every Super Admin instead — as does any Integration Admin's request. Bounded by the (small) number of currently-pending Admins,
   // not the total Admin count, so the N+1 lookup here is cheap in practice.
-  async hasPendingPasswordRequestsForSuperAdmin(): Promise<boolean> {
-    // Integration Admins have no tenant, so no tenant Admin can see their
-    // request — Super Admins are their only reset path.
-    const pendingIntegrationAdmin = await this.prisma.user.findFirst({
+  // Reported separately so the UI can put each indicator on the page that resolves it
+  // (Tenants vs Integration Admins).
+  async pendingPasswordRequestsForSuperAdmin(): Promise<{
+    tenantAdmins: boolean;
+    integrationAdmins: boolean;
+  }> {
+    const [tenantAdmins, integrationAdmins] = await Promise.all([
+      this.hasPendingFirstAdminRequest(),
+      this.hasPendingIntegrationAdminRequest(),
+    ]);
+    return { tenantAdmins, integrationAdmins };
+  }
+
+  // Integration Admins have no tenant, so no tenant Admin can see their request —
+  // Super Admins are their only reset path.
+  private async hasPendingIntegrationAdminRequest(): Promise<boolean> {
+    const pending = await this.prisma.user.findFirst({
       where: {
         role: UserRole.INTEGRATION_ADMIN,
         passwordResetRequestedAt: { not: null },
       },
       select: { id: true },
     });
-    if (pendingIntegrationAdmin) {
-      return true;
-    }
+    return pending !== null;
+  }
 
+  private async hasPendingFirstAdminRequest(): Promise<boolean> {
     const pendingAdmins = await this.prisma.user.findMany({
       where: { role: UserRole.ADMIN, passwordResetRequestedAt: { not: null } },
       select: { id: true, tenantId: true },

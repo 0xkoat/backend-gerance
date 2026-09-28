@@ -27,7 +27,7 @@ const mockUsersService = {
   resetSoleAdminPassword: jest.fn(),
   requestOwnPasswordChange: jest.fn(),
   hasPendingPasswordRequestsForAdmin: jest.fn(),
-  hasPendingPasswordRequestsForSuperAdmin: jest.fn(),
+  pendingPasswordRequestsForSuperAdmin: jest.fn(),
 };
 
 const mockJwtService = {
@@ -570,7 +570,7 @@ describe('UsersController', () => {
         mockUsersService.hasPendingPasswordRequestsForAdmin,
       ).toHaveBeenCalledWith(admin.userId, admin.tenantId);
       expect(
-        mockUsersService.hasPendingPasswordRequestsForSuperAdmin,
+        mockUsersService.pendingPasswordRequestsForSuperAdmin,
       ).not.toHaveBeenCalled();
       expect(result).toEqual({ hasPending: true });
     });
@@ -581,20 +581,37 @@ describe('UsersController', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('delegates to the Super Admin-path check instead, platform-wide', async () => {
-      mockUsersService.hasPendingPasswordRequestsForSuperAdmin.mockResolvedValue(
-        false,
-      );
+    it('reports tenant-Admin and Integration-Admin requests separately for a Super Admin', async () => {
+      mockUsersService.pendingPasswordRequestsForSuperAdmin.mockResolvedValue({
+        tenantAdmins: false,
+        integrationAdmins: true,
+      });
 
       const result = await controller.getMyPendingPasswordRequests(superAdmin);
 
       expect(
-        mockUsersService.hasPendingPasswordRequestsForSuperAdmin,
-      ).toHaveBeenCalled();
-      expect(
         mockUsersService.hasPendingPasswordRequestsForAdmin,
       ).not.toHaveBeenCalled();
-      expect(result).toEqual({ hasPending: false });
+      expect(result).toEqual({
+        hasPending: true,
+        tenantAdmins: false,
+        integrationAdmins: true,
+      });
+    });
+
+    it('reports nothing pending for a Super Admin when neither source has a request', async () => {
+      mockUsersService.pendingPasswordRequestsForSuperAdmin.mockResolvedValue({
+        tenantAdmins: false,
+        integrationAdmins: false,
+      });
+
+      const result = await controller.getMyPendingPasswordRequests(superAdmin);
+
+      expect(result).toEqual({
+        hasPending: false,
+        tenantAdmins: false,
+        integrationAdmins: false,
+      });
     });
   });
 });

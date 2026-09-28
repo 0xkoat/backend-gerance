@@ -683,56 +683,71 @@ describe('UsersService', () => {
     });
   });
 
-  describe('hasPendingPasswordRequestsForSuperAdmin', () => {
-    it('returns false when no Admin or Integration Admin has a pending request', async () => {
-      mockPrismaService.user.findFirst.mockResolvedValueOnce(null);
+  describe('pendingPasswordRequestsForSuperAdmin', () => {
+    // clearAllMocks (beforeEach) keeps implementations, so don't leak this one.
+    afterEach(() => {
+      mockPrismaService.user.findFirst.mockReset();
+    });
+
+    // Promise.all starts the tenant-Admin check (findMany) and the Integration-Admin
+    // check (findFirst) together, so findFirst mocks are keyed by query rather than
+    // call order.
+    function mockFindFirst(
+      integrationAdminPending: boolean,
+      firstAdminId?: string,
+    ) {
+      mockPrismaService.user.findFirst.mockImplementation(
+        (args: { where: { role: UserRole } }) =>
+          Promise.resolve(
+            args.where.role === UserRole.INTEGRATION_ADMIN
+              ? integrationAdminPending
+                ? { id: 'ia-1' }
+                : null
+              : firstAdminId
+                ? { id: firstAdminId }
+                : null,
+          ),
+      );
+    }
+
+    it('reports nothing when no Admin or Integration Admin has a pending request', async () => {
+      mockFindFirst(false);
       mockPrismaService.user.findMany.mockResolvedValueOnce([]);
 
-      const result = await service.hasPendingPasswordRequestsForSuperAdmin();
-
-      expect(result).toBe(false);
+      await expect(
+        service.pendingPasswordRequestsForSuperAdmin(),
+      ).resolves.toEqual({ tenantAdmins: false, integrationAdmins: false });
     });
 
-    it('returns true when an Integration Admin has a pending request, without checking tenant Admins', async () => {
-      mockPrismaService.user.findFirst.mockResolvedValueOnce({ id: 'ia-1' });
+    it('reports an Integration Admin request separately from tenant Admins', async () => {
+      mockFindFirst(true);
+      mockPrismaService.user.findMany.mockResolvedValueOnce([]);
 
-      const result = await service.hasPendingPasswordRequestsForSuperAdmin();
-
-      expect(result).toBe(true);
-      expect(mockPrismaService.user.findFirst).toHaveBeenCalledWith({
-        where: {
-          role: UserRole.INTEGRATION_ADMIN,
-          passwordResetRequestedAt: { not: null },
-        },
-        select: { id: true },
-      });
-      expect(mockPrismaService.user.findMany).not.toHaveBeenCalled();
+      await expect(
+        service.pendingPasswordRequestsForSuperAdmin(),
+      ).resolves.toEqual({ tenantAdmins: false, integrationAdmins: true });
     });
 
-    it("returns true when a pending Admin is their tenant's first-created Admin", async () => {
-      mockPrismaService.user.findFirst
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ id: 'admin-1' });
+    it("reports a tenant request when the pending Admin is their tenant's first-created Admin", async () => {
+      mockFindFirst(false, 'admin-1');
       mockPrismaService.user.findMany.mockResolvedValueOnce([
         { id: 'admin-1', tenantId: 'tenant-1' },
       ]);
 
-      const result = await service.hasPendingPasswordRequestsForSuperAdmin();
-
-      expect(result).toBe(true);
+      await expect(
+        service.pendingPasswordRequestsForSuperAdmin(),
+      ).resolves.toEqual({ tenantAdmins: true, integrationAdmins: false });
     });
 
-    it('returns false when the pending Admin is a co-Admin, not the first-created one (handled by the tenant Admin path instead)', async () => {
-      mockPrismaService.user.findFirst
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ id: 'admin-1' });
+    it('ignores a pending co-Admin (handled by the tenant Admin path instead)', async () => {
+      mockFindFirst(false, 'admin-1');
       mockPrismaService.user.findMany.mockResolvedValueOnce([
         { id: 'co-admin-2', tenantId: 'tenant-1' },
       ]);
 
-      const result = await service.hasPendingPasswordRequestsForSuperAdmin();
-
-      expect(result).toBe(false);
+      await expect(
+        service.pendingPasswordRequestsForSuperAdmin(),
+      ).resolves.toEqual({ tenantAdmins: false, integrationAdmins: false });
     });
   });
 

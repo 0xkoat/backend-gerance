@@ -95,11 +95,21 @@ export class UsersController {
   @Get('me/pending-password-requests')
   async getMyPendingPasswordRequests(
     @CurrentUser() user: AuthenticatedUser,
-  ): Promise<{ hasPending: boolean }> {
+  ): Promise<{
+    hasPending: boolean;
+    tenantAdmins?: boolean;
+    integrationAdmins?: boolean;
+  }> {
+    // A Super Admin resolves requests on two different pages, so the two sources are
+    // reported separately; hasPending stays the combined flag for existing callers.
     if (user.role === UserRole.SUPER_ADMIN) {
-      const hasPending =
-        await this.usersService.hasPendingPasswordRequestsForSuperAdmin();
-      return { hasPending };
+      const { tenantAdmins, integrationAdmins } =
+        await this.usersService.pendingPasswordRequestsForSuperAdmin();
+      return {
+        hasPending: tenantAdmins || integrationAdmins,
+        tenantAdmins,
+        integrationAdmins,
+      };
     }
 
     if (!user.tenantId) {
