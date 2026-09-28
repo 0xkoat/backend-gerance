@@ -45,6 +45,28 @@ tickets), analyst levels L1/L2/L3, `VIEWER` removed, (3) module endpoint registr
 - Verified: 186 unit / 80 e2e passing, `tsc` clean, live checks against the dev stack
   (removed routes 404, SSE stays open, user and tenant deletion with real auth history).
 
+**Phase 2 done 2026-09-28** (commits `6f89e53`, `14996bb`, `88155f4`, `dd3d7a0`,
+`affcd24`):
+- Migration `20260928084306_analyst_levels_integration_admin`: `AnalystLevel` enum
+  (L1/L2/L3) + nullable `User.analystLevel`, `UserRole` is now
+  `SUPER_ADMIN | INTEGRATION_ADMIN | ADMIN | ANALYST` with no default, existing VIEWERs
+  became ANALYST L1, and a `User_analystLevel_matches_role` CHECK constraint guarantees
+  every Analyst has a level and no one else does (hand-written SQL; Prisma can't express
+  it). `UsersService.resolveAnalystLevel` returns the same rule as a 400 before the DB is
+  reached.
+- `POST /users` and `PATCH /users/:id/role` take `{ role: ADMIN|ANALYST, analystLevel? }`.
+- Access token carries `analystLevel` (null for non-Analysts); both signing sites use
+  `accessTokenClaims()` in `jwt.strategy.ts`. Phase 3's launch endpoint must still
+  re-check the level in the DB, since a token can be up to 15 minutes stale.
+- `/integration-admins` (Super Admin only): create, list, reset password, delete. An
+  Integration Admin's password-change request lights the Super Admin indicator
+  (`hasPendingPasswordRequestsForSuperAdmin`).
+- `seed:demo`: per tenant 2 Admins + one Analyst per level, plus a fixed demo Integration
+  Admin `integration.admin@secops.demo` (shared demo password).
+- Verified: 203 unit / 87 e2e, live logins confirm the new token claims, Playwright 12/12.
+- Known pre-existing issue, not from v2: `tsc -p test/tsconfig.json` reports
+  `auth.e2e-spec.ts(123)` `increment` on `never` (confirmed at the pre-Phase-2 commit).
+
 Every section below that describes the six modules, the orchestration chain, the asset
 feed, the MockAdapter poller or the "Module implementation plan" is **historical** — it
 documents what was built and then removed, kept for the internship record. Don't treat it
@@ -149,35 +171,27 @@ No public sign-up exists anywhere in this platform. Every user, at every role, i
 someone above them in the hierarchy — never by themselves.
 
 ```
-                     ┌───────────────────────────────────────┐
-                     │              SUPER ADMIN                │
-                     │  seeded once via a seed script —         │
-                     │  NEVER exposed as an HTTP route          │
-                     │  • not bound to any tenant                │
-                     │  • creates Tenants                        │
-                     │  • creates each Tenant's first Admin      │
-                     └───────────────────┬─────────────────────┘
-                                         │ creates
-                                         ▼
-                     ┌───────────────────────────────────────┐
-                     │                 ADMIN                    │
-                     │  tenant-scoped                            │
-                     │  • full control within their own tenant   │
-                     │  • creates co-Admin, Analyst, or Viewer    │
-                     │    accounts, scoped to their own tenant_id │
-                     │    only (self-loop: Admin → Admin)         │
-                     └───────────────────┬─────────────────────┘
-                                         │ creates
-                         ┌───────────────┴────────────────┐
-                         ▼                                 ▼
-             ┌─────────────────────┐           ┌─────────────────────┐
-             │       ANALYST         │           │       VIEWER          │
-             │  tenant-scoped         │           │  tenant-scoped         │
-             │  investigate alerts,   │           │  read-only:            │
-             │  SIEM/CTI/DFIR work,   │           │  dashboards & alerts   │
-             │  can trigger SOAR      │           │                        │
-             └─────────────────────┘           └─────────────────────┘
+                     SUPER ADMIN  (seeded once via a seed script, never an HTTP route;
+                                   no tenant)
+                       │  creates Tenants + each Tenant's first Admin
+                       │  creates/resets/deletes Integration Admins (/integration-admins)
+           ┌───────────┴──────────────────────┐
+           ▼                                  ▼
+     INTEGRATION ADMIN  (v2)            ADMIN  (tenant-scoped)
+     platform-wide, no tenant           full control in their own tenant,
+     only: module IP/port (Phase 3),    creates co-Admins and Analysts in
+     Module tickets (Phase 4)           their own tenant_id only
+                                        (self-loop: Admin -> Admin)
+                                              │ creates
+                                              ▼
+                                        ANALYST L1 / L2 / L3  (tenant-scoped)
+                                        level = which modules they may launch
+                                        (Phase 3); analystLevel is set exactly
+                                        when role = ANALYST (DB CHECK)
 ```
+
+VIEWER was removed in the v2 redesign (Phase 2, 2026-09-28); the migration turned existing
+viewers into L1 Analysts.
 
 Hard rules that follow from this:
 - No `/auth/register` or equivalent self-signup endpoint exists, ever.
@@ -187,7 +201,7 @@ Hard rules that follow from this:
 - A new user's `role` is determined by which endpoint/action is called, never by a
   client-supplied `role` field in the request body.
 - An Admin may create another Admin in their own tenant (co-Admin), in addition to
-  Analyst/Viewer — same tenant-scoping rule applies (`tenant_id` from the creator's token,
+  Analyst — same tenant-scoping rule applies (`tenant_id` from the creator's token,
   never the request body). This is the one hierarchy self-loop (Admin → Admin); every other
   role is only ever created by the level above it.
 - The very first Super Admin is bootstrapped by a one-time seed script (reads credentials
