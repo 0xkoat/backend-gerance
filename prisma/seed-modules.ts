@@ -20,6 +20,9 @@ const prisma = new PrismaClient({
 
 const TENANT_COUNT = 5;
 const SHARED_PASSWORD = 'DemoPassw0rd!2026';
+// Fixed, not faker-generated, and seeded after the tenants so adding it
+// doesn't shift any tenant's generated identities.
+const DEMO_INTEGRATION_ADMIN_EMAIL = 'integration.admin@secops.demo';
 
 function randomInt(min: number, max: number): number {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -139,6 +142,24 @@ async function main() {
     allCredentials.push(...creds);
   }
 
+  // Platform-wide, like the Super Admin: no tenant.
+  await prisma.user.create({
+    data: {
+      email: DEMO_INTEGRATION_ADMIN_EMAIL,
+      phoneNumber: phoneNumber(),
+      name: 'Demo Integration Admin',
+      role: UserRole.INTEGRATION_ADMIN,
+      hashedPassword,
+      mustChangePassword: false,
+    },
+  });
+  allCredentials.push({
+    tenantName: 'Platform (no tenant)',
+    email: DEMO_INTEGRATION_ADMIN_EMAIL,
+    role: UserRole.INTEGRATION_ADMIN,
+    analystLevel: null,
+  });
+
   console.log('\n=== Demo credentials (all accounts share one password) ===');
   console.log(`Password for every seeded account: ${SHARED_PASSWORD}\n`);
 
@@ -151,7 +172,7 @@ async function main() {
     const label = cred.analystLevel
       ? `${cred.role} ${cred.analystLevel}`
       : cred.role;
-    console.log(`  [${label.padEnd(10)}] ${cred.email}`);
+    console.log(`  [${label.padEnd(17)}] ${cred.email}`);
   }
   console.log(`\nTotal accounts seeded: ${allCredentials.length}`);
 }
