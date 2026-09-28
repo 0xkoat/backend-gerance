@@ -100,8 +100,11 @@ describe('NotificationsService', () => {
   describe('markRead', () => {
     it("only ever touches the caller's own notification", async () => {
       mockPrismaService.notification.updateMany.mockResolvedValue({ count: 1 });
+      mockPrismaService.notification.count.mockResolvedValue(4);
 
-      await service.markRead('user-1', 'n-1');
+      await expect(service.markRead('user-1', 'n-1')).resolves.toEqual({
+        unreadCount: 4,
+      });
 
       expect(mockPrismaService.notification.updateMany).toHaveBeenCalledWith({
         where: { id: 'n-1', userId: 'user-1', readAt: null },
@@ -112,8 +115,11 @@ describe('NotificationsService', () => {
     it('is a no-op for an already-read notification', async () => {
       mockPrismaService.notification.updateMany.mockResolvedValue({ count: 0 });
       mockPrismaService.notification.findFirst.mockResolvedValue({ id: 'n-1' });
+      mockPrismaService.notification.count.mockResolvedValue(0);
 
-      await expect(service.markRead('user-1', 'n-1')).resolves.toBeUndefined();
+      await expect(service.markRead('user-1', 'n-1')).resolves.toEqual({
+        unreadCount: 0,
+      });
     });
 
     it("404s someone else's (or a missing) notification", async () => {
@@ -129,7 +135,9 @@ describe('NotificationsService', () => {
   it('marks all of the caller’s unread notifications as read', async () => {
     mockPrismaService.notification.updateMany.mockResolvedValue({ count: 2 });
 
-    await service.markAllRead('user-1');
+    await expect(service.markAllRead('user-1')).resolves.toEqual({
+      unreadCount: 0,
+    });
 
     expect(mockPrismaService.notification.updateMany).toHaveBeenCalledWith({
       where: { userId: 'user-1', readAt: null },

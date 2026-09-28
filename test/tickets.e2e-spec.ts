@@ -62,8 +62,8 @@ describe('Tickets and notifications (e2e)', () => {
     listForUser: jest
       .fn()
       .mockResolvedValue({ notifications: [], unreadCount: 0 }),
-    markRead: jest.fn().mockResolvedValue(undefined),
-    markAllRead: jest.fn().mockResolvedValue(undefined),
+    markRead: jest.fn().mockResolvedValue({ unreadCount: 0 }),
+    markAllRead: jest.fn().mockResolvedValue({ unreadCount: 0 }),
   };
 
   const validTicket = {
@@ -245,11 +245,11 @@ describe('Tickets and notifications (e2e)', () => {
       await request(app.getHttpServer())
         .patch(`/api/notifications/${TICKET_ID}/read`)
         .set('Authorization', `Bearer ${token}`)
-        .expect(204);
+        .expect(200);
       await request(app.getHttpServer())
         .post('/api/notifications/read-all')
         .set('Authorization', `Bearer ${token}`)
-        .expect(204);
+        .expect(200);
 
       expect(mockNotificationsService.listForUser).toHaveBeenCalledWith(
         users.integrationAdmin.id,

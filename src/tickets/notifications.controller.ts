@@ -22,17 +22,16 @@ export class NotificationsController {
   }
 
   @Patch(':id/read')
-  @HttpCode(204)
-  async markRead(
+  markRead(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ParseUUIDPipe) id: string,
   ) {
-    await this.notificationsService.markRead(user.userId, id);
+    return this.notificationsService.markRead(user.userId, id);
   }
 
   @Post('read-all')
-  @HttpCode(204)
-  async markAllRead(@CurrentUser() user: AuthenticatedUser) {
-    await this.notificationsService.markAllRead(user.userId);
+  @HttpCode(200)
+  markAllRead(@CurrentUser() user: AuthenticatedUser) {
+    return this.notificationsService.markAllRead(user.userId);
   }
 }

@@ -64,7 +64,8 @@ export class NotificationsService {
     return { notifications, unreadCount };
   }
 
-  async markRead(userId: string, id: string): Promise<void> {
+  // Both mark-read calls return the caller's new unread count for the bell.
+  async markRead(userId: string, id: string): Promise<{ unreadCount: number }> {
     // Scoped by userId, so one user can never mark another's notification.
     const { count } = await this.prisma.notification.updateMany({
       where: { id, userId, readAt: null },
@@ -79,12 +80,21 @@ export class NotificationsService {
         throw new NotFoundException('Notification not found');
       }
     }
+    return this.unreadCount(userId);
   }
 
-  async markAllRead(userId: string): Promise<void> {
+  async markAllRead(userId: string): Promise<{ unreadCount: number }> {
     await this.prisma.notification.updateMany({
       where: { userId, readAt: null },
       data: { readAt: new Date() },
     });
+    return { unreadCount: 0 };
+  }
+
+  private async unreadCount(userId: string): Promise<{ unreadCount: number }> {
+    const unreadCount = await this.prisma.notification.count({
+      where: { userId, readAt: null },
+    });
+    return { unreadCount };
   }
 }
