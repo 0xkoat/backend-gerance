@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
 import { UsersService } from './users.service';
 import { UsersController } from './users.controller';
+import { IntegrationAdminsController } from './integration-admins.controller';
 import { PrismaModule } from '../prisma/prisma.module';
 
 const jwtSecret = process.env.JWT_SECRET;
@@ -22,7 +23,7 @@ if (!jwtSecret) {
       signOptions: { expiresIn: '15m' },
     }),
   ],
-  controllers: [UsersController],
+  controllers: [UsersController, IntegrationAdminsController],
   providers: [UsersService],
   exports: [UsersService],
 })

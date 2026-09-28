@@ -361,6 +361,46 @@ export class UsersService {
     await this.applyPasswordReset(id, target.hashedPassword, newPassword);
   }
 
+  // INTEGRATION_ADMIN accounts are platform-wide (tenantId null) and managed
+  // only by Super Admins — see IntegrationAdminsController.
+  async findAllIntegrationAdmins() {
+    return this.prisma.user.findMany({
+      where: { role: UserRole.INTEGRATION_ADMIN },
+      omit: { hashedPassword: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+  }
+
+  async removeIntegrationAdmin(id: string) {
+    await this.findIntegrationAdminOrThrow(id);
+
+    // Same RESTRICT-on-userId cleanup as removeUserForTenant.
+    const results = await this.prisma.$transaction([
+      this.prisma.refreshToken.deleteMany({ where: { userId: id } }),
+      this.prisma.passwordHistory.deleteMany({ where: { userId: id } }),
+      this.prisma.user.delete({ where: { id } }),
+    ]);
+
+    return results[2];
+  }
+
+  async resetIntegrationAdminPassword(
+    id: string,
+    newPassword: string,
+  ): Promise<void> {
+    const target = await this.findIntegrationAdminOrThrow(id);
+    await this.applyPasswordReset(id, target.hashedPassword, newPassword);
+  }
+
+  private async findIntegrationAdminOrThrow(id: string) {
+    const target = await this.prisma.user.findUnique({ where: { id } });
+
+    if (!target || target.role !== UserRole.INTEGRATION_ADMIN) {
+      throw new NotFoundException('Integration Admin not found');
+    }
+    return target;
+  }
+
   private async applyPasswordReset(
     id: string,
     currentHashedPassword: string,

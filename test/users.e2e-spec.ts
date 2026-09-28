@@ -60,6 +60,16 @@ describe('UsersController (e2e)', () => {
     mustChangePassword: false,
   };
 
+  const superAdminUser: FakeUser = {
+    id: 'super-admin-1',
+    email: 'super-admin@x.com',
+    name: 'Super Admin',
+    phoneNumber: '+21612345683',
+    role: UserRole.SUPER_ADMIN,
+    tenantId: null,
+    mustChangePassword: false,
+  };
+
   const noTenantAdminUser: FakeUser = {
     id: 'admin-no-tenant',
     email: 'admin-no-tenant@x.com',
@@ -85,6 +95,7 @@ describe('UsersController (e2e)', () => {
     [analystUser.email]: analystUser,
     [integrationAdminUser.email]: integrationAdminUser,
     [noTenantAdminUser.email]: noTenantAdminUser,
+    [superAdminUser.email]: superAdminUser,
     [resetPendingUser.email]: resetPendingUser,
   };
 
@@ -98,6 +109,9 @@ describe('UsersController (e2e)', () => {
     removeUserForTenant: jest.fn(),
     changePassword: jest.fn(),
     resetPasswordForTenant: jest.fn(),
+    findAllIntegrationAdmins: jest.fn(),
+    resetIntegrationAdminPassword: jest.fn(),
+    removeIntegrationAdmin: jest.fn(),
   };
 
   async function loginAs(email: string): Promise<string> {
@@ -179,6 +193,102 @@ describe('UsersController (e2e)', () => {
         .get('/api/users/me')
         .set('Authorization', `Bearer ${token}`)
         .expect(403);
+    });
+  });
+
+  describe('/integration-admins', () => {
+    const createBody = {
+      name: 'Integrator',
+      email: 'integrator@x.com',
+      password: 'Str0ng!Passw0rd',
+      phoneNumber: '+21620345698',
+    };
+
+    it('lets a Super Admin create a platform-wide Integration Admin', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockUsersService.createUser.mockResolvedValue({
+        ...createBody,
+        id: 'ia-new',
+        role: UserRole.INTEGRATION_ADMIN,
+        tenantId: null,
+        hashedPassword,
+      });
+
+      const response = await request(app.getHttpServer())
+        .post('/api/integration-admins')
+        .set('Authorization', `Bearer ${token}`)
+        .send(createBody)
+        .expect(201);
+
+      expect(mockUsersService.createUser).toHaveBeenCalledWith(
+        expect.objectContaining({ email: createBody.email }),
+        UserRole.INTEGRATION_ADMIN,
+        null,
+      );
+      expect(response.body).not.toHaveProperty('hashedPassword');
+    });
+
+    it('rejects a role or tenantId smuggled into the create body', async () => {
+      const token = await loginAs(superAdminUser.email);
+
+      await request(app.getHttpServer())
+        .post('/api/integration-admins')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ ...createBody, role: UserRole.SUPER_ADMIN, tenantId: 't-1' })
+        .expect(400);
+      expect(mockUsersService.createUser).not.toHaveBeenCalled();
+    });
+
+    it('lets a Super Admin list, reset and delete Integration Admins', async () => {
+      const token = await loginAs(superAdminUser.email);
+      mockUsersService.findAllIntegrationAdmins.mockResolvedValue([]);
+
+      await request(app.getHttpServer())
+        .get('/api/integration-admins')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+      await request(app.getHttpServer())
+        .post(
+          `/api/integration-admins/${integrationAdminUser.id}/reset-password`,
+        )
+        .set('Authorization', `Bearer ${token}`)
+        .send({ newPassword: 'New-password1!' })
+        .expect(201);
+      await request(app.getHttpServer())
+        .delete(`/api/integration-admins/${integrationAdminUser.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(200);
+
+      expect(
+        mockUsersService.resetIntegrationAdminPassword,
+      ).toHaveBeenCalledWith(integrationAdminUser.id, 'New-password1!');
+      expect(mockUsersService.removeIntegrationAdmin).toHaveBeenCalledWith(
+        integrationAdminUser.id,
+      );
+    });
+
+    it.each([
+      ['a tenant Admin', () => adminUser.email],
+      ['an Analyst', () => analystUser.email],
+      ['an Integration Admin', () => integrationAdminUser.email],
+    ])('rejects %s on every route', async (_label, email) => {
+      const token = await loginAs(email());
+
+      await request(app.getHttpServer())
+        .get('/api/integration-admins')
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      await request(app.getHttpServer())
+        .post('/api/integration-admins')
+        .set('Authorization', `Bearer ${token}`)
+        .send(createBody)
+        .expect(403);
+      await request(app.getHttpServer())
+        .delete(`/api/integration-admins/${integrationAdminUser.id}`)
+        .set('Authorization', `Bearer ${token}`)
+        .expect(403);
+      expect(mockUsersService.createUser).not.toHaveBeenCalled();
+      expect(mockUsersService.removeIntegrationAdmin).not.toHaveBeenCalled();
     });
   });
 

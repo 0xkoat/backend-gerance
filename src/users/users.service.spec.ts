@@ -914,4 +914,87 @@ describe('UsersService', () => {
       expect(mockPrismaService.user.update).not.toHaveBeenCalled();
     });
   });
+
+  describe('integration admins', () => {
+    const integrationAdmin = {
+      id: 'ia-1',
+      role: UserRole.INTEGRATION_ADMIN,
+      tenantId: null,
+      hashedPassword: 'old-hashed-password',
+    };
+
+    it('lists only INTEGRATION_ADMIN accounts, without password hashes', async () => {
+      mockPrismaService.user.findMany.mockResolvedValue([]);
+
+      await service.findAllIntegrationAdmins();
+
+      expect(mockPrismaService.user.findMany).toHaveBeenCalledWith({
+        where: { role: UserRole.INTEGRATION_ADMIN },
+        omit: { hashedPassword: true },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      });
+    });
+
+    it('deletes an Integration Admin along with its auth history', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(integrationAdmin);
+      mockPrismaService.$transaction.mockResolvedValue([
+        { count: 1 },
+        { count: 1 },
+        integrationAdmin,
+      ]);
+
+      const result = await service.removeIntegrationAdmin('ia-1');
+
+      expect(mockPrismaService.refreshToken.deleteMany).toHaveBeenCalledWith({
+        where: { userId: 'ia-1' },
+      });
+      expect(mockPrismaService.passwordHistory.deleteMany).toHaveBeenCalledWith(
+        { where: { userId: 'ia-1' } },
+      );
+      expect(mockPrismaService.user.delete).toHaveBeenCalledWith({
+        where: { id: 'ia-1' },
+      });
+      expect(result).toEqual(integrationAdmin);
+    });
+
+    it('refuses to delete an account that is not an Integration Admin', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue({
+        ...integrationAdmin,
+        role: UserRole.ADMIN,
+        tenantId: 'tenant-1',
+      });
+
+      await expect(service.removeIntegrationAdmin('ia-1')).rejects.toThrow(
+        NotFoundException,
+      );
+      expect(mockPrismaService.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('resets an Integration Admin password and forces a change on next login', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(integrationAdmin);
+      mockPrismaService.passwordHistory.findMany.mockResolvedValue([]);
+      (argon2.verify as jest.Mock).mockResolvedValue(false);
+      (argon2.hash as jest.Mock).mockResolvedValue('new-hashed-password');
+
+      await service.resetIntegrationAdminPassword('ia-1', 'New-password1!');
+
+      expect(mockPrismaService.user.update).toHaveBeenCalledWith({
+        where: { id: 'ia-1' },
+        data: expect.objectContaining({
+          hashedPassword: 'new-hashed-password',
+          mustChangePassword: true,
+          passwordResetRequestedAt: null,
+        }),
+      });
+    });
+
+    it('refuses to reset the password of a missing account', async () => {
+      mockPrismaService.user.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.resetIntegrationAdminPassword('missing', 'New-password1!'),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockPrismaService.user.update).not.toHaveBeenCalled();
+    });
+  });
 });
