@@ -39,18 +39,6 @@ const mockPrismaService = {
     delete: jest.fn(),
     deleteMany: jest.fn(),
   },
-  assetFeedEntry: { deleteMany: jest.fn() },
-  dfirLink: { deleteMany: jest.fn() },
-  dfirIncident: { deleteMany: jest.fn() },
-  soarExecution: { deleteMany: jest.fn() },
-  soarPlaybook: { deleteMany: jest.fn() },
-  siemAlert: { deleteMany: jest.fn() },
-  siemLog: { deleteMany: jest.fn() },
-  edrDetection: { deleteMany: jest.fn() },
-  edrEndpoint: { deleteMany: jest.fn() },
-  ctiIoc: { deleteMany: jest.fn() },
-  vmVulnerability: { deleteMany: jest.fn() },
-  vmAsset: { deleteMany: jest.fn() },
   refreshToken: { deleteMany: jest.fn() },
   passwordHistory: { deleteMany: jest.fn() },
   $transaction: jest.fn(defaultTransactionImplementation),
@@ -432,7 +420,7 @@ describe('TenantsService', () => {
       createdAt: new Date(),
     };
 
-    it('deletes every security-module table scoped to the tenant, then tenant modules, users, and finally the tenant itself', async () => {
+    it('deletes tenant modules, auth history, users, and finally the tenant itself', async () => {
       mockPrismaService.tenant.findUnique.mockResolvedValue({
         ...existingTenant,
         users: [],
@@ -442,18 +430,6 @@ describe('TenantsService', () => {
       const result = await service.deleteTenantWithUsers('tenant-1');
 
       const scopedTables = [
-        mockPrismaService.assetFeedEntry,
-        mockPrismaService.dfirLink,
-        mockPrismaService.dfirIncident,
-        mockPrismaService.soarExecution,
-        mockPrismaService.soarPlaybook,
-        mockPrismaService.siemAlert,
-        mockPrismaService.siemLog,
-        mockPrismaService.edrDetection,
-        mockPrismaService.edrEndpoint,
-        mockPrismaService.ctiIoc,
-        mockPrismaService.vmVulnerability,
-        mockPrismaService.vmAsset,
         mockPrismaService.tenantModule,
         mockPrismaService.user,
       ];
@@ -474,7 +450,7 @@ describe('TenantsService', () => {
       expect(result).toEqual(existingTenant);
     });
 
-    it('deletes the module tables that reference other module tables before those tables', async () => {
+    it('deletes the rows that reference users before the users themselves', async () => {
       mockPrismaService.tenant.findUnique.mockResolvedValue({
         ...existingTenant,
         users: [],
@@ -486,18 +462,6 @@ describe('TenantsService', () => {
           callOrder.push(name);
           return Promise.resolve({ count: 0 });
         });
-      trackCall('dfirLink', mockPrismaService.dfirLink.deleteMany);
-      trackCall('dfirIncident', mockPrismaService.dfirIncident.deleteMany);
-      trackCall('soarExecution', mockPrismaService.soarExecution.deleteMany);
-      trackCall('soarPlaybook', mockPrismaService.soarPlaybook.deleteMany);
-      trackCall('siemAlert', mockPrismaService.siemAlert.deleteMany);
-      trackCall('edrDetection', mockPrismaService.edrDetection.deleteMany);
-      trackCall('edrEndpoint', mockPrismaService.edrEndpoint.deleteMany);
-      trackCall(
-        'vmVulnerability',
-        mockPrismaService.vmVulnerability.deleteMany,
-      );
-      trackCall('vmAsset', mockPrismaService.vmAsset.deleteMany);
       trackCall('refreshToken', mockPrismaService.refreshToken.deleteMany);
       trackCall(
         'passwordHistory',
@@ -507,24 +471,6 @@ describe('TenantsService', () => {
 
       await service.deleteTenantWithUsers('tenant-1');
 
-      expect(callOrder.indexOf('dfirLink')).toBeLessThan(
-        callOrder.indexOf('dfirIncident'),
-      );
-      expect(callOrder.indexOf('soarExecution')).toBeLessThan(
-        callOrder.indexOf('soarPlaybook'),
-      );
-      expect(callOrder.indexOf('soarExecution')).toBeLessThan(
-        callOrder.indexOf('siemAlert'),
-      );
-      expect(callOrder.indexOf('edrDetection')).toBeLessThan(
-        callOrder.indexOf('edrEndpoint'),
-      );
-      expect(callOrder.indexOf('vmVulnerability')).toBeLessThan(
-        callOrder.indexOf('vmAsset'),
-      );
-      expect(callOrder.indexOf('siemAlert')).toBeLessThan(
-        callOrder.indexOf('user'),
-      );
       expect(callOrder.indexOf('refreshToken')).toBeLessThan(
         callOrder.indexOf('user'),
       );

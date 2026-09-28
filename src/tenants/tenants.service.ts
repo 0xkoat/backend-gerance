@@ -190,29 +190,13 @@ export class TenantsService {
   async deleteTenantWithUsers(id: string) {
     await this.findById(id);
 
-    // Every security-module table's tenantId FK is RESTRICT (Prisma's
-    // default), so each one has to be cleared before the Tenant row itself
-    // can go — order matters here: children before the parents they
-    // reference (e.g. DfirLink before DfirIncident, SoarExecution before
-    // both SoarPlaybook and SiemAlert), and SiemAlert before User since an
-    // alert can optionally reference its assignedToUser. RefreshToken and
+    // Every tenantId FK is RESTRICT (Prisma's default), so child rows have
+    // to be cleared before the Tenant row itself can go. RefreshToken and
     // PasswordHistory are scoped by userId, not tenantId, but also RESTRICT
     // on User — filtered via the `user` relation so they can stay in this
     // same array-based transaction instead of needing a separate
     // fetch-user-ids-first step.
     const results = await this.prisma.$transaction([
-      this.prisma.assetFeedEntry.deleteMany({ where: { tenantId: id } }),
-      this.prisma.dfirLink.deleteMany({ where: { tenantId: id } }),
-      this.prisma.dfirIncident.deleteMany({ where: { tenantId: id } }),
-      this.prisma.soarExecution.deleteMany({ where: { tenantId: id } }),
-      this.prisma.soarPlaybook.deleteMany({ where: { tenantId: id } }),
-      this.prisma.siemAlert.deleteMany({ where: { tenantId: id } }),
-      this.prisma.siemLog.deleteMany({ where: { tenantId: id } }),
-      this.prisma.edrDetection.deleteMany({ where: { tenantId: id } }),
-      this.prisma.edrEndpoint.deleteMany({ where: { tenantId: id } }),
-      this.prisma.ctiIoc.deleteMany({ where: { tenantId: id } }),
-      this.prisma.vmVulnerability.deleteMany({ where: { tenantId: id } }),
-      this.prisma.vmAsset.deleteMany({ where: { tenantId: id } }),
       this.prisma.tenantModule.deleteMany({ where: { tenantId: id } }),
       this.prisma.refreshToken.deleteMany({
         where: { user: { tenantId: id } },
@@ -225,7 +209,7 @@ export class TenantsService {
     ]);
 
     // Last element is the tenant.delete() result, per the array above.
-    const deletedTenant = results[16];
+    const deletedTenant = results[4];
     return deletedTenant;
   }
 }

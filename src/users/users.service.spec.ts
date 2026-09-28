@@ -33,10 +33,6 @@ const mockPrismaService = {
   refreshToken: {
     deleteMany: jest.fn(),
   },
-  siemAlert: { updateMany: jest.fn() },
-  edrDetection: { updateMany: jest.fn() },
-  dfirIncident: { updateMany: jest.fn() },
-  vmVulnerability: { updateMany: jest.fn() },
   $transaction: jest.fn(),
 };
 
@@ -312,15 +308,11 @@ describe('UsersService', () => {
   describe('removeUserForTenant', () => {
     const existingUser = { id: '1', tenantId: 'tenant-1' };
 
-    it('clears RefreshToken/PasswordHistory and unassigns the four module tables before deleting the user', async () => {
+    it('clears RefreshToken/PasswordHistory before deleting the user', async () => {
       mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
       mockPrismaService.$transaction.mockResolvedValue([
         { count: 2 }, // refreshToken
         { count: 1 }, // passwordHistory
-        { count: 0 }, // siemAlert
-        { count: 0 }, // edrDetection
-        { count: 0 }, // dfirIncident
-        { count: 0 }, // vmVulnerability
         existingUser, // user.delete()
       ]);
 
@@ -333,17 +325,6 @@ describe('UsersService', () => {
       expect(mockPrismaService.passwordHistory.deleteMany).toHaveBeenCalledWith(
         { where: { userId: '1' } },
       );
-      for (const table of [
-        mockPrismaService.siemAlert,
-        mockPrismaService.edrDetection,
-        mockPrismaService.dfirIncident,
-        mockPrismaService.vmVulnerability,
-      ]) {
-        expect(table.updateMany).toHaveBeenCalledWith({
-          where: { assignedToUserId: '1' },
-          data: { assignedToUserId: null },
-        });
-      }
       expect(mockPrismaService.user.delete).toHaveBeenCalledWith({
         where: { id: '1' },
       });
