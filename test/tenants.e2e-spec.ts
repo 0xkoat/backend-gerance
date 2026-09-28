@@ -78,6 +78,8 @@ describe('TenantsController (e2e)', () => {
       deleteMany: jest.fn(),
     },
     passwordHistory: { deleteMany: jest.fn() },
+    notification: { deleteMany: jest.fn() },
+    ticket: { deleteMany: jest.fn() },
   };
 
   async function loginAs(email: string): Promise<string> {
@@ -473,6 +475,8 @@ describe('TenantsController (e2e)', () => {
         users: [],
       });
       mockPrismaService.$transaction.mockResolvedValue([
+        { count: 0 }, // notification
+        { count: 0 }, // ticket
         { count: 1 }, // tenantModule
         { count: 3 }, // refreshToken
         { count: 3 }, // passwordHistory

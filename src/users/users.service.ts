@@ -161,14 +161,17 @@ export class UsersService {
     // who's ever logged in (RefreshToken) or changed a password
     // (PasswordHistory — unconditional on first login) would otherwise 500 a
     // plain user.delete().
+    // Tickets they created stay (Ticket.createdById goes NULL; the name/email
+    // snapshot keeps them readable); their own notifications go.
     const results = await this.prisma.$transaction([
       this.prisma.refreshToken.deleteMany({ where: { userId: id } }),
       this.prisma.passwordHistory.deleteMany({ where: { userId: id } }),
+      this.prisma.notification.deleteMany({ where: { userId: id } }),
       this.prisma.user.delete({ where: { id } }),
     ]);
 
     // Last element is the user.delete() result, per the array above.
-    return results[2];
+    return results[3];
   }
 
   // Every tenant must always have at least one Admin. Demoting the last one
@@ -404,10 +407,11 @@ export class UsersService {
     const results = await this.prisma.$transaction([
       this.prisma.refreshToken.deleteMany({ where: { userId: id } }),
       this.prisma.passwordHistory.deleteMany({ where: { userId: id } }),
+      this.prisma.notification.deleteMany({ where: { userId: id } }),
       this.prisma.user.delete({ where: { id } }),
     ]);
 
-    return results[2];
+    return results[3];
   }
 
   async resetIntegrationAdminPassword(

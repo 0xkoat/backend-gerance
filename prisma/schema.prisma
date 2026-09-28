@@ -30,6 +30,7 @@ model Tenant {
   createdAt DateTime       @default(now())
   users     User[]
   modules   TenantModule[]
+  tickets   Ticket[]
 }
 
 enum UserRole {
@@ -66,6 +67,8 @@ model User {
   updatedAt                DateTime          @updatedAt
   refreshTokens            RefreshToken[]
   passwordHistory          PasswordHistory[]
+  ticketsCreated           Ticket[]
+  notifications            Notification[]
 
   @@index([tenantId])
 }
@@ -153,4 +156,66 @@ model ModuleLaunch {
   launchedAt DateTime   @default(now())
 
   @@index([tenantId, launchedAt])
+}
+
+enum TicketCategory {
+  MODULES
+  ACCOUNT_ACCESS
+  OTHER
+}
+
+enum TicketStatus {
+  OPEN
+  IN_PROGRESS
+  RESOLVED
+}
+
+// Support ticket raised by a tenant Admin or Analyst. Recipients: every Admin
+// of the tenant, plus every Integration Admin for MODULES tickets. moduleName
+// is set exactly when category = MODULES (Ticket_moduleName_matches_category
+// CHECK, raw SQL in the migration). createdById goes NULL if the creator is
+// deleted; the name/email snapshot keeps the ticket readable.
+model Ticket {
+  id                String         @id @default(uuid()) @db.Uuid
+  tenantId          String         @db.Uuid
+  tenant            Tenant         @relation(fields: [tenantId], references: [id])
+  createdById       String?        @db.Uuid
+  createdBy         User?          @relation(fields: [createdById], references: [id])
+  createdByName     String
+  createdByEmail    String
+  title             String
+  description       String
+  category          TicketCategory
+  moduleName        ModuleName?
+  status            TicketStatus   @default(OPEN)
+  // Plain id, no relation: who last changed the status (audit only).
+  statusChangedById String?        @db.Uuid
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  notifications     Notification[]
+
+  @@index([tenantId, createdAt])
+  @@index([category, createdAt])
+  @@index([createdById])
+}
+
+enum NotificationType {
+  TICKET_CREATED
+  TICKET_STATUS_CHANGED
+}
+
+// One row per recipient. Stored so a user who was offline still sees it;
+// also pushed live over the SSE stream (notification.created).
+model Notification {
+  id        String           @id @default(uuid()) @db.Uuid
+  userId    String           @db.Uuid
+  user      User             @relation(fields: [userId], references: [id])
+  ticketId  String           @db.Uuid
+  ticket    Ticket           @relation(fields: [ticketId], references: [id])
+  type      NotificationType
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, createdAt])
+  @@index([ticketId])
 }

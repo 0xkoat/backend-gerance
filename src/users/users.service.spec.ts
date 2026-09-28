@@ -34,6 +34,7 @@ const mockPrismaService = {
   refreshToken: {
     deleteMany: jest.fn(),
   },
+  notification: { deleteMany: jest.fn() },
   $transaction: jest.fn(),
 };
 
@@ -325,11 +326,12 @@ describe('UsersService', () => {
   describe('removeUserForTenant', () => {
     const existingUser = { id: '1', tenantId: 'tenant-1' };
 
-    it('clears RefreshToken/PasswordHistory before deleting the user', async () => {
+    it('clears RefreshToken/PasswordHistory/notifications before deleting the user', async () => {
       mockPrismaService.user.findUnique.mockResolvedValue(existingUser);
       mockPrismaService.$transaction.mockResolvedValue([
         { count: 2 }, // refreshToken
         { count: 1 }, // passwordHistory
+        { count: 4 }, // notification
         existingUser, // user.delete()
       ]);
 
@@ -342,6 +344,9 @@ describe('UsersService', () => {
       expect(mockPrismaService.passwordHistory.deleteMany).toHaveBeenCalledWith(
         { where: { userId: '1' } },
       );
+      expect(mockPrismaService.notification.deleteMany).toHaveBeenCalledWith({
+        where: { userId: '1' },
+      });
       expect(mockPrismaService.user.delete).toHaveBeenCalledWith({
         where: { id: '1' },
       });
@@ -976,11 +981,15 @@ describe('UsersService', () => {
       mockPrismaService.$transaction.mockResolvedValue([
         { count: 1 },
         { count: 1 },
+        { count: 2 },
         integrationAdmin,
       ]);
 
       const result = await service.removeIntegrationAdmin('ia-1');
 
+      expect(mockPrismaService.notification.deleteMany).toHaveBeenCalledWith({
+        where: { userId: 'ia-1' },
+      });
       expect(mockPrismaService.refreshToken.deleteMany).toHaveBeenCalledWith({
         where: { userId: 'ia-1' },
       });

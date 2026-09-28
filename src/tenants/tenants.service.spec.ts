@@ -46,6 +46,8 @@ const mockPrismaService = {
   },
   refreshToken: { deleteMany: jest.fn() },
   passwordHistory: { deleteMany: jest.fn() },
+  notification: { deleteMany: jest.fn() },
+  ticket: { deleteMany: jest.fn() },
   $transaction: jest.fn(defaultTransactionImplementation),
 };
 
@@ -424,7 +426,7 @@ describe('TenantsService', () => {
       createdAt: new Date(),
     };
 
-    it('deletes tenant modules, auth history, users, and finally the tenant itself', async () => {
+    it('deletes notifications, tickets, tenant modules, auth history, users, and finally the tenant itself', async () => {
       mockPrismaService.tenant.findUnique.mockResolvedValue({
         ...existingTenant,
         users: [],
@@ -434,9 +436,13 @@ describe('TenantsService', () => {
       const result = await service.deleteTenantWithUsers('tenant-1');
 
       const scopedTables = [
+        mockPrismaService.ticket,
         mockPrismaService.tenantModule,
         mockPrismaService.user,
       ];
+      expect(mockPrismaService.notification.deleteMany).toHaveBeenCalledWith({
+        where: { ticket: { tenantId: 'tenant-1' } },
+      });
       for (const table of scopedTables) {
         expect(table.deleteMany).toHaveBeenCalledWith({
           where: { tenantId: 'tenant-1' },
@@ -472,8 +478,18 @@ describe('TenantsService', () => {
         mockPrismaService.passwordHistory.deleteMany,
       );
       trackCall('user', mockPrismaService.user.deleteMany);
+      trackCall('notification', mockPrismaService.notification.deleteMany);
+      trackCall('ticket', mockPrismaService.ticket.deleteMany);
 
       await service.deleteTenantWithUsers('tenant-1');
+
+      // Notifications reference tickets (and users); tickets are gone before users.
+      expect(callOrder.indexOf('notification')).toBeLessThan(
+        callOrder.indexOf('ticket'),
+      );
+      expect(callOrder.indexOf('ticket')).toBeLessThan(
+        callOrder.indexOf('user'),
+      );
 
       expect(callOrder.indexOf('refreshToken')).toBeLessThan(
         callOrder.indexOf('user'),

@@ -200,7 +200,13 @@ export class TenantsService {
     // on User — filtered via the `user` relation so they can stay in this
     // same array-based transaction instead of needing a separate
     // fetch-user-ids-first step.
+    // Notifications are cleared by ticket, not by user: Integration Admins get
+    // notifications about this tenant's tickets without belonging to it.
     const results = await this.prisma.$transaction([
+      this.prisma.notification.deleteMany({
+        where: { ticket: { tenantId: id } },
+      }),
+      this.prisma.ticket.deleteMany({ where: { tenantId: id } }),
       this.prisma.tenantModule.deleteMany({ where: { tenantId: id } }),
       this.prisma.refreshToken.deleteMany({
         where: { user: { tenantId: id } },
@@ -213,7 +219,7 @@ export class TenantsService {
     ]);
 
     // Last element is the tenant.delete() result, per the array above.
-    const deletedTenant = results[4];
+    const deletedTenant = results[6];
     return deletedTenant;
   }
 }
