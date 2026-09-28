@@ -1,22 +1,17 @@
 import { Injectable, MessageEvent } from '@nestjs/common';
-import { fromEvent, Observable, merge, filter, map } from 'rxjs';
+import { fromEvent, Observable, merge, filter, map, NEVER } from 'rxjs';
 import { EventEmitter2 } from '@nestjs/event-emitter';
-import type {
-  UnifiedEvent,
-  SoarExecutionPayload,
-  DfirIncidentPayload,
-  RecordAssignedPayload,
-  RecordStatusChangedPayload,
-  RecordDeletedPayload,
-} from '../common/security-module/types';
 
-type StreamableEvent =
-  | UnifiedEvent
-  | SoarExecutionPayload
-  | DfirIncidentPayload
-  | RecordAssignedPayload
-  | RecordStatusChangedPayload
-  | RecordDeletedPayload;
+// Every event relayed over SSE must carry the tenant it belongs to.
+interface TenantScopedEvent {
+  tenantId: string;
+}
+
+// Explicit event-name list (not EventEmitterModule's wildcard mode) so every
+// streamed name is reviewable in one place. Empty since the security-module
+// data layer was removed (v2 redesign) — ticket notifications are the next
+// thing meant to be relayed here.
+export const STREAMED_EVENTS: readonly string[] = [];
 
 @Injectable()
 export class EventsService {
@@ -24,33 +19,18 @@ export class EventsService {
 
   // One SSE stream per open connection, filtered to the caller's own tenant.
   // This is the only tenant-isolation boundary here, since EventEmitter2
-  // itself is process-global and not tenant-aware. Explicit event-name list
-  // (not EventEmitterModule's wildcard mode) so every subscribed name is
-  // reviewable in one place; fromEvent's Node-style overload untyped +
-  // cast right after the merge, since RxJS 7's typed overload for
-  // EventEmitter2-shaped emitters is deprecated.
+  // itself is process-global and not tenant-aware. NEVER keeps the stream
+  // open even with no subscribed names — an empty merge() would complete
+  // immediately and make every client's EventSource reconnect in a loop.
+  // fromEvent's Node-style overload untyped + cast right after the merge,
+  // since RxJS 7's typed overload for EventEmitter2-shaped emitters is
+  // deprecated.
   streamForTenant(tenantId: string): Observable<MessageEvent> {
     return merge(
-      fromEvent(this.eventEmitter, 'edr.detection.created'),
-      fromEvent(this.eventEmitter, 'siem.alert.created'),
-      fromEvent(this.eventEmitter, 'soar.execution.created'),
-      fromEvent(this.eventEmitter, 'dfir.incident.created'),
-      fromEvent(this.eventEmitter, 'vm.vulnerability.created'),
-      fromEvent(this.eventEmitter, 'cti.ioc.created'),
-      fromEvent(this.eventEmitter, 'siem.alert.assigned'),
-      fromEvent(this.eventEmitter, 'siem.alert.status_changed'),
-      fromEvent(this.eventEmitter, 'edr.detection.assigned'),
-      fromEvent(this.eventEmitter, 'edr.detection.status_changed'),
-      fromEvent(this.eventEmitter, 'dfir.incident.assigned'),
-      fromEvent(this.eventEmitter, 'dfir.incident.status_changed'),
-      fromEvent(this.eventEmitter, 'vm.vulnerability.assigned'),
-      fromEvent(this.eventEmitter, 'siem.alert.unassigned'),
-      fromEvent(this.eventEmitter, 'edr.detection.unassigned'),
-      fromEvent(this.eventEmitter, 'dfir.incident.unassigned'),
-      fromEvent(this.eventEmitter, 'vm.vulnerability.unassigned'),
-      fromEvent(this.eventEmitter, 'cti.ioc.deleted'),
+      NEVER,
+      ...STREAMED_EVENTS.map((name) => fromEvent(this.eventEmitter, name)),
     ).pipe(
-      map((event) => event as StreamableEvent),
+      map((event) => event as TenantScopedEvent),
       filter((event) => event.tenantId === tenantId),
       map((event) => ({ data: event })),
     );
