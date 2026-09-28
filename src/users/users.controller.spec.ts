@@ -40,6 +40,7 @@ describe('UsersController', () => {
   const admin: AuthenticatedUser = {
     userId: 'admin-1',
     role: UserRole.ADMIN,
+    analystLevel: null,
     tenantId: 'tenant-1',
     mustChangePassword: false,
   };
@@ -47,6 +48,7 @@ describe('UsersController', () => {
   const noTenantAdmin: AuthenticatedUser = {
     userId: 'admin-1',
     role: UserRole.ADMIN,
+    analystLevel: null,
     tenantId: null,
     mustChangePassword: false,
   };
@@ -54,6 +56,7 @@ describe('UsersController', () => {
   const superAdmin: AuthenticatedUser = {
     userId: 'sa-1',
     role: UserRole.SUPER_ADMIN,
+    analystLevel: null,
     tenantId: null,
     mustChangePassword: false,
   };
@@ -64,6 +67,7 @@ describe('UsersController', () => {
     name: 'Bob',
     phoneNumber: '+21612345678',
     role: UserRole.ANALYST,
+    analystLevel: AnalystLevel.L1,
     tenantId: 'tenant-1',
     hashedPassword: 'hashed-password',
     createdAt: new Date(),

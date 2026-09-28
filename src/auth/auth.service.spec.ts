@@ -272,7 +272,7 @@ describe('AuthService', () => {
       mockPrismaService.refreshToken.create.mockResolvedValue({ id: 'rt-1' });
     });
 
-    it('signs a JWT with sub, role, tenantId and mustChangePassword', async () => {
+    it('signs a JWT with sub, role, analystLevel, tenantId and mustChangePassword', async () => {
       mockJwtService.sign.mockReturnValue('signed-jwt');
 
       await service.login(safeUser);
@@ -280,6 +280,7 @@ describe('AuthService', () => {
       expect(mockJwtService.sign).toHaveBeenCalledWith({
         sub: '1',
         role: UserRole.ANALYST,
+        analystLevel: AnalystLevel.L1,
         tenantId: 'tenant-1',
         mustChangePassword: false,
       });

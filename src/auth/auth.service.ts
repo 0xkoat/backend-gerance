@@ -6,6 +6,7 @@ import { User } from '../generated/prisma/client';
 import * as argon2 from 'argon2';
 import { randomBytes, randomUUID, createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import { accessTokenClaims } from './jwt.strategy';
 
 type SafeUser = Omit<User, 'hashedPassword'>;
 
@@ -197,12 +198,7 @@ export class AuthService {
   }
 
   private signAccessToken(user: SafeUser): string {
-    return this.jwtService.sign({
-      sub: user.id,
-      role: user.role,
-      tenantId: user.tenantId,
-      mustChangePassword: user.mustChangePassword,
-    });
+    return this.jwtService.sign(accessTokenClaims(user));
   }
 
   private async issueRefreshToken(userId: string, familyId: string) {

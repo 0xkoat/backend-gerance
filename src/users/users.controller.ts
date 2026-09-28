@@ -13,6 +13,7 @@ import { JwtService } from '@nestjs/jwt';
 import { UsersService } from './users.service';
 import { User, UserRole } from '../generated/prisma/client';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { accessTokenClaims } from '../auth/jwt.strategy';
 import type { AuthenticatedUser } from '../auth/jwt.strategy';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CreateSubordinateUserDto } from './dto/createSubordinateUser.dto';
@@ -69,12 +70,7 @@ export class UsersController {
       changePasswordDto.newPassword,
     );
 
-    const access_token = this.jwtService.sign({
-      sub: updatedUser.id,
-      role: updatedUser.role,
-      tenantId: updatedUser.tenantId,
-      mustChangePassword: updatedUser.mustChangePassword,
-    });
+    const access_token = this.jwtService.sign(accessTokenClaims(updatedUser));
 
     return {
       message: 'Password changed successfully',

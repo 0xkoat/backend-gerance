@@ -3,7 +3,7 @@ import { ForbiddenException } from '@nestjs/common';
 import { of } from 'rxjs';
 import { EventsController } from './events.controller';
 import { EventsService } from './events.service';
-import { UserRole } from '../generated/prisma/enums';
+import { AnalystLevel, UserRole } from '../generated/prisma/enums';
 import type { AuthenticatedUser } from '../auth/jwt.strategy';
 
 const mockEventsService = {
@@ -16,6 +16,7 @@ describe('EventsController', () => {
   const analyst: AuthenticatedUser = {
     userId: 'user-1',
     role: UserRole.ANALYST,
+    analystLevel: AnalystLevel.L1,
     tenantId: 'tenant-1',
     mustChangePassword: false,
   };
@@ -23,6 +24,7 @@ describe('EventsController', () => {
   const noTenantAdmin: AuthenticatedUser = {
     userId: 'admin-1',
     role: UserRole.ADMIN,
+    analystLevel: null,
     tenantId: null,
     mustChangePassword: false,
   };

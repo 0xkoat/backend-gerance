@@ -1,11 +1,12 @@
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { Injectable } from '@nestjs/common';
-import { UserRole } from 'src/generated/prisma/enums';
+import { AnalystLevel, UserRole } from 'src/generated/prisma/enums';
 
-interface JwtPayload {
+export interface JwtPayload {
   sub: string;
   role: UserRole;
+  analystLevel: AnalystLevel | null;
   tenantId: string | null;
   mustChangePassword: boolean;
 }
@@ -13,8 +14,28 @@ interface JwtPayload {
 export interface AuthenticatedUser {
   userId: string;
   role: UserRole;
+  analystLevel: AnalystLevel | null;
   tenantId: string | null;
   mustChangePassword: boolean;
+}
+
+// The one place access-token claims are built — shared by AuthService
+// (login/refresh) and UsersController (post-password-change re-sign) so the
+// two signing sites can't drift apart.
+export function accessTokenClaims(user: {
+  id: string;
+  role: UserRole;
+  analystLevel: AnalystLevel | null;
+  tenantId: string | null;
+  mustChangePassword: boolean;
+}): JwtPayload {
+  return {
+    sub: user.id,
+    role: user.role,
+    analystLevel: user.analystLevel,
+    tenantId: user.tenantId,
+    mustChangePassword: user.mustChangePassword,
+  };
 }
 
 @Injectable()
@@ -45,6 +66,8 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     return {
       userId: payload.sub,
       role: payload.role,
+      // Tokens minted before analyst levels existed carry no claim at all.
+      analystLevel: payload.analystLevel ?? null,
       tenantId: payload.tenantId,
       mustChangePassword: payload.mustChangePassword,
     };
