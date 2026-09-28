@@ -369,9 +369,30 @@ describe('TenantsController (e2e)', () => {
         .expect(201);
 
       expect(mockPrismaService.tenantModule.create).toHaveBeenCalledWith({
-        data: { tenantId: 'tenant-1', moduleName: 'EDR', config: undefined },
+        data: {
+          tenantId: 'tenant-1',
+          moduleName: 'EDR',
+          minAnalystLevel: 'L2',
+        },
       });
       expect(response.body).toMatchObject({ moduleName: 'EDR' });
+    });
+
+    it('rejects a leftover config field (removed in v2) and a level from the Super Admin side', async () => {
+      const token = await loginAs(superAdminUser.email);
+
+      await request(app.getHttpServer())
+        .post('/api/tenants/tenant-1/modules')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ moduleName: 'EDR', config: {} })
+        .expect(400);
+      await request(app.getHttpServer())
+        .patch('/api/tenants/tenant-1/modules/EDR')
+        .set('Authorization', `Bearer ${token}`)
+        .send({ isActive: true, minAnalystLevel: 'L1' })
+        .expect(400);
+      expect(mockPrismaService.tenantModule.create).not.toHaveBeenCalled();
+      expect(mockPrismaService.tenantModule.update).not.toHaveBeenCalled();
     });
 
     it('rejects an invalid moduleName', async () => {

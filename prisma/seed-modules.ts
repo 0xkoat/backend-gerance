@@ -13,6 +13,7 @@ import {
   UserRole,
   ModuleName,
 } from '../src/generated/prisma/enums';
+import { DEFAULT_MIN_ANALYST_LEVEL } from '../src/module-access/module-levels';
 
 const prisma = new PrismaClient({
   adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
@@ -116,7 +117,7 @@ async function seedTenant(
       tenantId: tenant.id,
       moduleName,
       isActive: true,
-      config: {},
+      minAnalystLevel: DEFAULT_MIN_ANALYST_LEVEL[moduleName],
     })),
   });
 

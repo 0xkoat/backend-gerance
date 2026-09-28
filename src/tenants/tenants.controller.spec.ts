@@ -115,13 +115,11 @@ describe('TenantsController', () => {
 
       const result = await controller.activateModule('tenant-1', {
         moduleName: ModuleName.EDR,
-        config: { pollIntervalMinutes: 5 },
       });
 
       expect(mockTenantsService.activateModule).toHaveBeenCalledWith(
         'tenant-1',
         ModuleName.EDR,
-        { pollIntervalMinutes: 5 },
       );
       expect(result).toEqual(created);
     });

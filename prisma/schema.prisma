@@ -104,14 +104,53 @@ enum ModuleName {
   VM
 }
 
+// A tenant's subscription to one module (activated by a Super Admin) plus the
+// minimum analyst level that may launch it in that tenant (set by the
+// tenant's own Admin). Admins can always launch an active module.
 model TenantModule {
-  id         String     @id @default(uuid()) @db.Uuid
-  tenantId   String     @db.Uuid
-  tenant     Tenant     @relation(fields: [tenantId], references: [id])
-  config     Json?
-  isActive   Boolean    @default(true)
-  moduleName ModuleName
+  id              String       @id @default(uuid()) @db.Uuid
+  tenantId        String       @db.Uuid
+  tenant          Tenant       @relation(fields: [tenantId], references: [id])
+  isActive        Boolean      @default(true)
+  moduleName      ModuleName
+  minAnalystLevel AnalystLevel @default(L1)
 
   @@unique([tenantId, moduleName])
   @@index([tenantId])
+}
+
+enum ModuleProtocol {
+  HTTP
+  HTTPS
+}
+
+// Where each module's single, platform-wide instance lives (a private
+// IP:PORT, not public). One row per ModuleName, created by the migration;
+// only an Integration Admin edits it. host/port stay NULL until configured,
+// and an unconfigured module can't be launched.
+model ModuleEndpoint {
+  moduleName  ModuleName     @id
+  protocol    ModuleProtocol @default(HTTPS)
+  host        String?
+  port        Int?
+  path        String         @default("/")
+  updatedAt   DateTime       @updatedAt
+  // Plain id, no relation: the audit value shouldn't block deleting that
+  // Integration Admin.
+  updatedById String?        @db.Uuid
+}
+
+// Append-only audit of module launches. Snapshot columns, no relations, so
+// history survives user and tenant deletion.
+model ModuleLaunch {
+  id         String     @id @default(uuid()) @db.Uuid
+  userId     String     @db.Uuid
+  userEmail  String
+  role       UserRole
+  tenantId   String     @db.Uuid
+  moduleName ModuleName
+  targetUrl  String
+  launchedAt DateTime   @default(now())
+
+  @@index([tenantId, launchedAt])
 }

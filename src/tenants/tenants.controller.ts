@@ -70,7 +70,6 @@ export class TenantsController {
     return this.tenantsService.activateModule(
       id,
       activateTenantModuleDto.moduleName,
-      activateTenantModuleDto.config,
     );
   }
 

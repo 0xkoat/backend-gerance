@@ -8,6 +8,7 @@ import { ModuleName, Prisma, UserRole } from '../generated/prisma/client';
 import type { TenantModule } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTenantDto } from './dto/createTenant.dto';
+import { DEFAULT_MIN_ANALYST_LEVEL } from '../module-access/module-levels';
 import * as argon2 from 'argon2';
 
 @Injectable()
@@ -111,13 +112,16 @@ export class TenantsService {
   async activateModule(
     tenantId: string,
     moduleName: ModuleName,
-    config?: object,
   ): Promise<TenantModule> {
     await this.ensureTenantExists(tenantId);
 
     try {
       return await this.prisma.tenantModule.create({
-        data: { tenantId, moduleName, config },
+        data: {
+          tenantId,
+          moduleName,
+          minAnalystLevel: DEFAULT_MIN_ANALYST_LEVEL[moduleName],
+        },
       });
     } catch (error) {
       if (
@@ -135,7 +139,7 @@ export class TenantsService {
   async updateModule(
     tenantId: string,
     moduleName: ModuleName,
-    dto: { isActive?: boolean; config?: object },
+    dto: { isActive?: boolean },
   ): Promise<TenantModule> {
     await this.ensureTenantExists(tenantId);
 

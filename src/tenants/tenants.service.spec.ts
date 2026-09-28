@@ -3,7 +3,12 @@ import { ConflictException, Logger, NotFoundException } from '@nestjs/common';
 import * as argon2 from 'argon2';
 import { TenantsService } from './tenants.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { ModuleName, Prisma, UserRole } from '../generated/prisma/client';
+import {
+  AnalystLevel,
+  ModuleName,
+  Prisma,
+  UserRole,
+} from '../generated/prisma/client';
 import { CreateTenantDto } from './dto/createTenant.dto';
 
 jest.mock('argon2');
@@ -268,7 +273,7 @@ describe('TenantsService', () => {
   });
 
   describe('activateModule', () => {
-    it('creates a TenantModule row', async () => {
+    it('creates a TenantModule row with the default minimum analyst level', async () => {
       mockPrismaService.tenant.findUnique.mockResolvedValue({
         id: 'tenant-1',
       });
@@ -277,19 +282,18 @@ describe('TenantsService', () => {
         tenantId: 'tenant-1',
         moduleName: ModuleName.EDR,
         isActive: true,
+        minAnalystLevel: AnalystLevel.L2,
       };
       mockPrismaService.tenantModule.create.mockResolvedValue(created);
 
-      const result = await service.activateModule('tenant-1', ModuleName.EDR, {
-        pollIntervalMinutes: 5,
-      });
+      const result = await service.activateModule('tenant-1', ModuleName.EDR);
 
       expect(result).toEqual(created);
       expect(mockPrismaService.tenantModule.create).toHaveBeenCalledWith({
         data: {
           tenantId: 'tenant-1',
           moduleName: ModuleName.EDR,
-          config: { pollIntervalMinutes: 5 },
+          minAnalystLevel: AnalystLevel.L2,
         },
       });
     });
@@ -363,7 +367,7 @@ describe('TenantsService', () => {
       mockPrismaService.tenant.findUnique.mockResolvedValue(null);
 
       await expect(
-        service.updateModule('missing-id', ModuleName.EDR, {}),
+        service.updateModule('missing-id', ModuleName.EDR, { isActive: true }),
       ).rejects.toThrow(NotFoundException);
       expect(mockPrismaService.tenantModule.update).not.toHaveBeenCalled();
     });
