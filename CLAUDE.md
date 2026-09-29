@@ -86,6 +86,29 @@ tickets), analyst levels L1/L2/L3, `VIEWER` removed, (3) module endpoint registr
 - Verified: 230 unit / 105 e2e, plus a live walkthrough (reachable vs ECONNREFUSED probe,
   L1 Analyst refused SIEM then allowed after the Admin lowered it, launch log recorded).
 
+**Phase 4 done 2026-09-29** (commits `5129256`, `09b5afc`, `a44661b`, `bfb83f3`): tickets and
+notifications.
+- `Ticket` (tenant, creator + name/email snapshot, title, description, category
+  `MODULES | ACCOUNT_ACCESS | OTHER`, `moduleName` set exactly for MODULES via the
+  `Ticket_moduleName_matches_category` CHECK, status `OPEN | IN_PROGRESS | RESOLVED`) and
+  per-user `Notification` (`TICKET_CREATED | TICKET_STATUS_CHANGED`, `readAt`).
+- Visibility: tenant Admin = whole tenant, Analyst = own tickets, Integration Admin =
+  MODULES tickets from every tenant, Super Admin = none. Recipients (tenant Admins; plus
+  Integration Admins for MODULES) move OPEN -> IN_PROGRESS -> RESOLVED and can reopen;
+  the creator may only withdraw (their own ticket -> RESOLVED). New tickets notify every
+  recipient except the creator; status changes notify the creator.
+- Notifications are stored (`/notifications`: latest 30 + unread count, mark one/all read,
+  both returning `{ unreadCount }`) and pushed live: `EventsService` now streams per user
+  (`streamForUser`, event `notification.created`) instead of per tenant, so tenant-less
+  Integration Admins receive them.
+- Deletion: tenant deletion clears notifications by ticket (so Integration Admins' too)
+  then tickets; user / Integration Admin deletion clears that user's notifications; a
+  deleted creator's tickets stay (`createdById` -> NULL, Prisma's default for an optional
+  relation).
+- Verified: 255 unit / 119 e2e, plus a live run on the dev stack (Analyst's Modules ticket
+  reached the Admin's stored notifications and the Integration Admin's open SSE stream;
+  Admin status change notified the Analyst; Analyst's reopen attempt 403).
+
 Every section below that describes the six modules, the orchestration chain, the asset
 feed, the MockAdapter poller or the "Module implementation plan" is **historical** — it
 documents what was built and then removed, kept for the internship record. Don't treat it
