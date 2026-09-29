@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { ModuleName, UserRole } from '../generated/prisma/client';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -42,6 +43,8 @@ export class ModuleEndpointsController {
     );
   }
 
+  // Each call opens an outbound TCP connection (up to a 3 s timeout).
+  @Throttle({ default: { limit: 20, ttl: 60000 } })
   @Roles(UserRole.INTEGRATION_ADMIN)
   @Post(':moduleName/test')
   @HttpCode(200)

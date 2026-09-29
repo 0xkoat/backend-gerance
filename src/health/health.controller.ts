@@ -1,4 +1,5 @@
 import { Controller, Get } from '@nestjs/common';
+import { SkipThrottle } from '@nestjs/throttler';
 import {
   HealthCheckService,
   HealthCheck,
@@ -11,6 +12,8 @@ import { PrismaService } from '../prisma/prisma.service';
 const HEAP_THRESHOLD_BYTES = 300 * 1024 * 1024;
 const RSS_THRESHOLD_BYTES = 300 * 1024 * 1024;
 
+// Polled by Docker's healthcheck and uptime monitors: never rate limited.
+@SkipThrottle()
 @Controller('health')
 export class HealthController {
   constructor(

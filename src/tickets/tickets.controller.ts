@@ -8,6 +8,7 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { UserRole } from '../generated/prisma/client';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -24,6 +25,9 @@ import { ListTicketsQueryDto } from './dto/listTicketsQuery.dto';
 export class TicketsController {
   constructor(private readonly ticketsService: TicketsService) {}
 
+  // Every ticket notifies all the tenant's Admins (and the Integration
+  // Admins for MODULES), so creation gets a tighter limit than the default.
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Roles(UserRole.ADMIN, UserRole.ANALYST)
   @Post()
   create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateTicketDto) {

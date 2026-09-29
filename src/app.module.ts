@@ -11,6 +11,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { RolesGuard } from './auth/guards/roles.guard';
 import { JwtAuthGuard } from './auth/guards/jwt-auth.guard';
 import { MustChangePasswordGuard } from './auth/guards/must-change-password.guard';
+import { UserThrottlerGuard } from './common/user-throttler.guard';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ScheduleModule } from '@nestjs/schedule';
 
@@ -24,9 +25,11 @@ import { ScheduleModule } from '@nestjs/schedule';
 // guard's own file for what it does. Don't reorder these three without
 // re-reading all three guards' comments first.
 //
-// ThrottlerModule.forRoot's 10-per-60s here is the app-wide default; only
-// AuthController overrides it with the tighter 5-per-60s login/refresh/
-// logout/forgot-password limit (see that controller's own @Throttle()).
+// UserThrottlerGuard goes last: it counts authenticated requests per user,
+// so it needs request.user from JwtAuthGuard. ThrottlerModule.forRoot's
+// 120-per-60s is the app-wide default; AuthController (5/min), ticket
+// creation and the module connection test override it with @Throttle(),
+// and health checks opt out with @SkipThrottle().
 @Module({
   imports: [
     UsersModule,
@@ -36,7 +39,7 @@ import { ScheduleModule } from '@nestjs/schedule';
     EventsModule,
     ModuleAccessModule,
     TicketsModule,
-    ThrottlerModule.forRoot([{ ttl: 60000, limit: 10 }]),
+    ThrottlerModule.forRoot([{ ttl: 60000, limit: 120 }]),
     EventEmitterModule.forRoot(),
     ScheduleModule.forRoot(),
   ],
@@ -52,6 +55,12 @@ import { ScheduleModule } from '@nestjs/schedule';
     {
       provide: APP_GUARD,
       useClass: MustChangePasswordGuard,
+    },
+    // useExisting so tests can swap the guard with overrideProvider().
+    UserThrottlerGuard,
+    {
+      provide: APP_GUARD,
+      useExisting: UserThrottlerGuard,
     },
   ],
 })

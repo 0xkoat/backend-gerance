@@ -171,6 +171,31 @@ describe('Tickets and notifications (e2e)', () => {
       expect(mockTicketsService.create).not.toHaveBeenCalled();
     });
 
+    it('rate limits ticket creation per user, not per address', async () => {
+      const analystToken = await loginAs(users.analyst.email);
+      const adminToken = await loginAs(users.admin.email);
+
+      for (let i = 0; i < 10; i++) {
+        await request(app.getHttpServer())
+          .post('/api/tickets')
+          .set('Authorization', `Bearer ${analystToken}`)
+          .send(validTicket)
+          .expect(201);
+      }
+      await request(app.getHttpServer())
+        .post('/api/tickets')
+        .set('Authorization', `Bearer ${analystToken}`)
+        .send(validTicket)
+        .expect(429);
+
+      // Same test client address, different account: its own budget.
+      await request(app.getHttpServer())
+        .post('/api/tickets')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send(validTicket)
+        .expect(201);
+    });
+
     it.each([['integrationAdmin'], ['superAdmin']] as const)(
       'does not let a platform-wide %s raise a ticket',
       async (who) => {

@@ -4,12 +4,11 @@ import {
   Body,
   HttpCode,
   HttpStatus,
-  UseGuards,
   Req,
   Res,
   UnauthorizedException,
 } from '@nestjs/common';
-import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
+import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { AuthService, TokenPair } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -21,9 +20,9 @@ const REFRESH_TOKEN_COOKIE = 'refresh_token';
 // Scoped to /api/auth so the browser never attaches it to unrelated routes.
 const REFRESH_TOKEN_COOKIE_PATH = '/api/auth';
 
-// tighter limit: 5 attempts per minute per IP.
+// tighter limit: 5 attempts per minute per client IP (enforced by the global
+// UserThrottlerGuard, see app.module.ts).
 @Throttle({ default: { limit: 5, ttl: 60000 } })
-@UseGuards(ThrottlerGuard)
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}

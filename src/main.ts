@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import helmet from 'helmet';
@@ -22,7 +23,14 @@ declare const module: {
 // must be applied before routes are hit, and the global prefix must be set
 // before Nest resolves any controller path.
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+
+  // Every request reaches the backend through the Next.js BFF, which forwards
+  // the browser's address as X-Forwarded-For. Trusting only loopback and
+  // private-network hops makes req.ip that address (used by the rate limiter
+  // for anonymous routes) while a client talking to the backend directly
+  // from a public address can't spoof it.
+  app.set('trust proxy', process.env.TRUST_PROXY ?? 'loopback, uniquelocal');
 
   app.use(
     helmet({

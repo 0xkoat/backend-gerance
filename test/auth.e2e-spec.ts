@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import { ThrottlerGuard } from '@nestjs/throttler';
+import { UserThrottlerGuard } from '../src/common/user-throttler.guard';
 import cookieParser from 'cookie-parser';
 import request from 'supertest';
 import { App } from 'supertest/types';
@@ -229,7 +229,7 @@ describe('Auth refresh/logout flow (e2e)', () => {
       .useValue(mockUsersService)
       .overrideProvider(PrismaService)
       .useValue(mockPrismaService)
-      .overrideGuard(ThrottlerGuard)
+      .overrideProvider(UserThrottlerGuard)
       .useValue({ canActivate: () => true })
       .compile();
 
