@@ -11,7 +11,7 @@ name: Deploy
 # one-time-setup note in DOCKERIZATION_TODO.md / the chat that built this pipeline).
 #
 # Assumes docker-compose.image.yml + a real .env already exist on the VM at
-# $VM_DEPLOY_PATH — this workflow does not create or scp them. They live at the repo root
+# /opt/gerance-platform — this workflow does not create or scp them. They live at the repo root
 # (gerance-platform/), a location neither this repo nor frontend-gerance's checkout
 # contains, so there's nothing here to keep in sync automatically; update them on the VM by
 # hand if they ever change.
@@ -24,47 +24,33 @@ on:
   workflow_dispatch:
 
 env:
-  VM_DEPLOY_PATH: /opt/gerance-platform
   REGISTRY: ghcr.io/${{ github.repository_owner }}
 
 jobs:
   deploy:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-latest
+    # Runs ON the VM, through a self-hosted runner registered with the `secops-vm` label,
+    # so nothing has to reach the VM from the internet (a VirtualBox VM behind NAT can't be
+    # SSHed into from GitHub's cloud). build.yml still runs on GitHub-hosted runners.
+    runs-on: [self-hosted, secops-vm]
 
     steps:
-      - name: Deploy migrate + backend over SSH
-        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1
-        with:
-          host: ${{ secrets.AZURE_VM_HOST }}
-          username: ${{ secrets.AZURE_VM_USER }}
-          key: ${{ secrets.AZURE_VM_SSH_KEY }}
-          envs: REGISTRY
-          script: |
-            set -e
-            # Only needed if the GHCR packages are kept private (the default — see the
-            # secrets list). Skip this block entirely if you've made them public instead.
-            echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
+      - name: Deploy migrate + backend
+        working-directory: /opt/gerance-platform
+        run: |
+          set -e
+          # Only needed while the GHCR packages are private. The login is dropped again at
+          # the end of the job so the VM (and any OVA exported from it) keeps no token.
+          echo "${{ secrets.GHCR_PAT }}" | docker login ghcr.io -u "${{ secrets.GHCR_USERNAME }}" --password-stdin
 
-            # Hardcoded rather than $VM_DEPLOY_PATH — appleboy/ssh-action only forwards env
-            # vars named in `envs:` above into the remote shell (REGISTRY only), so
-            # $VM_DEPLOY_PATH was silently empty on the VM, `cd ""` was a no-op, and the
-            # compose file lookup below resolved against the SSH login's home directory
-            # instead of /opt/gerance-platform — the actual cause of a real failed deploy
-            # run (2026-08-22): "open /home/***/docker-compose.image.yml: no such file or
-            # directory". VM_DEPLOY_PATH stays in `env:` above for readability/documentation
-            # (and because workflow_dispatch's summary shows it), it just isn't the value
-            # actually driving this cd anymore.
-            cd /opt/gerance-platform
-            # BACKEND_TAG, not a shared TAG — docker-compose.image.yml used one shared TAG
-            # for every service's image tag until this same day (2026-08-22): frontend's
-            # deploy.yml setting TAG to *its own* commit sha, then running
-            # `docker compose up -d frontend`, made Compose recompute backend's desired
-            # image using that same (wrong) sha too — since `up` reconciles the whole
-            # dependency graph it's starting, not just the named service — and fail with
-            # "not found" trying to pull a backend image tag that was never built. Splitting
-            # into BACKEND_TAG/FRONTEND_TAG (docker-compose.image.yml's own comment has the
-            # full account) means this repo's deploy only ever moves its own tag.
-            export BACKEND_TAG="${{ github.event.workflow_run.head_sha || github.sha }}"
-            docker compose -f docker-compose.image.yml pull migrate backend
-            docker compose -f docker-compose.image.yml up -d migrate backend
+          # BACKEND_TAG, not a shared TAG: `docker compose up` reconciles the whole dependency
+          # graph, so a shared tag made one repo's deploy try to pull the other repo's image
+          # at the wrong sha (real failed deploy, 2026-08-22). Each pipeline moves only its
+          # own tag; see docker-compose.image.yml.
+          export BACKEND_TAG="${{ github.event.workflow_run.head_sha || github.sha }}"
+          docker compose -f docker-compose.image.yml pull migrate backend
+          docker compose -f docker-compose.image.yml up -d migrate backend
+
+      - name: Forget the registry login
+        if: always()
+        run: docker logout ghcr.io
