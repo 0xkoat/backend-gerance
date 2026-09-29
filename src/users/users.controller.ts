@@ -16,6 +16,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { accessTokenClaims } from '../auth/jwt.strategy';
 import type { AuthenticatedUser } from '../auth/jwt.strategy';
 import { Roles } from '../auth/decorators/roles.decorator';
+import { requireTenantId } from '../common/require-tenant-id';
 import { CreateSubordinateUserDto } from './dto/createSubordinateUser.dto';
 import { UpdateUserDto } from './dto/updateUser.dto';
 import { ChangeUserRoleDto } from './dto/changeUserRole.dto';
@@ -35,13 +36,11 @@ export class UsersController {
 
   @Get('me')
   async getMe(@CurrentUser() user: AuthenticatedUser): Promise<SafeUser> {
-    if (!user.tenantId) {
-      throw new ForbiddenException('This account is not scoped to a tenant');
-    }
+    const tenantId = requireTenantId(user);
 
     const foundUser = await this.usersService.findByIdForTenant(
       user.userId,
-      user.tenantId,
+      tenantId,
     );
     const { hashedPassword: _hashedPassword, ...safeUser } = foundUser;
 
@@ -112,14 +111,12 @@ export class UsersController {
       };
     }
 
-    if (!user.tenantId) {
-      throw new ForbiddenException('This account is not scoped to a tenant');
-    }
+    const tenantId = requireTenantId(user);
 
     const hasPending =
       await this.usersService.hasPendingPasswordRequestsForAdmin(
         user.userId,
-        user.tenantId,
+        tenantId,
       );
     return { hasPending };
   }
@@ -135,15 +132,13 @@ export class UsersController {
     @CurrentUser() user: AuthenticatedUser,
     @Body() createSubordinateUserDto: CreateSubordinateUserDto,
   ): Promise<SafeUser> {
-    if (!user.tenantId) {
-      throw new ForbiddenException('This account is not scoped to a tenant');
-    }
+    const tenantId = requireTenantId(user);
 
     const { role, analystLevel, ...userFields } = createSubordinateUserDto;
     const createdUser = await this.usersService.createUser(
       userFields,
       role,
-      user.tenantId,
+      tenantId,
       analystLevel,
     );
 
@@ -162,13 +157,11 @@ export class UsersController {
     page: number;
     pageSize: number;
   }> {
-    if (!user.tenantId) {
-      throw new ForbiddenException('This account is not scoped to a tenant');
-    }
+    const tenantId = requireTenantId(user);
 
     const { users, total, page, pageSize } =
       await this.usersService.findAllForTenant(
-        user.tenantId,
+        tenantId,
         query.page ?? 1,
         query.pageSize ?? 20,
       );
@@ -189,14 +182,9 @@ export class UsersController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
   ): Promise<SafeUser> {
-    if (!user.tenantId) {
-      throw new ForbiddenException('This account is not scoped to a tenant');
-    }
+    const tenantId = requireTenantId(user);
 
-    const foundUser = await this.usersService.findByIdForTenant(
-      id,
-      user.tenantId,
-    );
+    const foundUser = await this.usersService.findByIdForTenant(id, tenantId);
     const { hashedPassword: _hashedPassword, ...safeUser } = foundUser;
 
     return safeUser;
@@ -209,13 +197,11 @@ export class UsersController {
     @Param('id') id: string,
     @Body() updateUserDto: UpdateUserDto,
   ): Promise<SafeUser> {
-    if (!user.tenantId) {
-      throw new ForbiddenException('This account is not scoped to a tenant');
-    }
+    const tenantId = requireTenantId(user);
 
     const updatedUser = await this.usersService.updateUserForTenant(
       id,
-      user.tenantId,
+      tenantId,
       updateUserDto,
     );
     const { hashedPassword: _hashedPassword, ...safeUser } = updatedUser;
@@ -230,16 +216,14 @@ export class UsersController {
     @Param('id') id: string,
     @Body() changeUserRoleDto: ChangeUserRoleDto,
   ): Promise<SafeUser> {
-    if (!user.tenantId) {
-      throw new ForbiddenException('This account is not scoped to a tenant');
-    }
+    const tenantId = requireTenantId(user);
     if (id === user.userId) {
       throw new ForbiddenException('You cannot change your own role');
     }
 
     const updatedUser = await this.usersService.changeRoleForTenant(
       id,
-      user.tenantId,
+      tenantId,
       changeUserRoleDto.role,
       changeUserRoleDto.analystLevel,
     );
@@ -266,9 +250,7 @@ export class UsersController {
       return { message: 'Password reset successfully' };
     }
 
-    if (!user.tenantId) {
-      throw new ForbiddenException('This account is not scoped to a tenant');
-    }
+    const tenantId = requireTenantId(user);
     if (id === user.userId) {
       throw new ForbiddenException(
         'Use the change-password endpoint to update your own password',
@@ -277,7 +259,7 @@ export class UsersController {
 
     await this.usersService.resetPasswordForTenant(
       id,
-      user.tenantId,
+      tenantId,
       resetPasswordDto.newPassword,
     );
 
@@ -290,16 +272,14 @@ export class UsersController {
     @CurrentUser() user: AuthenticatedUser,
     @Param('id') id: string,
   ): Promise<{ message: string; id: string }> {
-    if (!user.tenantId) {
-      throw new ForbiddenException('This account is not scoped to a tenant');
-    }
+    const tenantId = requireTenantId(user);
     if (id === user.userId) {
       throw new ForbiddenException('You cannot delete your own account');
     }
 
     const deletedUser = await this.usersService.removeUserForTenant(
       id,
-      user.tenantId,
+      tenantId,
     );
 
     return { message: 'User deleted successfully', id: deletedUser.id };

@@ -21,11 +21,11 @@ export class HealthController {
   ) {}
 
   // Public (no JWT) so an external uptime monitor can hit it. One aggregate
-  // endpoint with a per-component breakdown rather than one route per
-  // module, since every module currently shares the same single failure mode
-  // (Postgres down), so a per-module route would just triplicate this
-  // check. Add a new named indicator here once a module gains its own
-  // independent external dependency (e.g. SIEM's Elastic cluster).
+  // endpoint with a per-component breakdown: the platform's only runtime
+  // dependency is Postgres. The external security modules are deliberately
+  // not probed here — their reachability is the Integration Admin's
+  // "Test connection" (module-access), and a module being down shouldn't
+  // mark the platform itself unhealthy.
   @Public()
   @Get()
   @HealthCheck()

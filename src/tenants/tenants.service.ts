@@ -94,15 +94,9 @@ export class TenantsService {
     return this.prisma.tenant.update({ where: { id }, data: { name } });
   }
 
-  // No CRUD for TenantModule existed anywhere before this — the only writer
-  // was the demo seed script, so a tenant created through the real
-  // provisioning path (createTenantWithAdmin, above) never got any rows,
-  // meaning PollingService's `where: { isActive: true }` query silently
-  // matched nothing for every real tenant. This is the actual activation
-  // path the architecture doc's "activate the modules relevant to them"
-  // language describes — deliberately not auto-provisioned at tenant
-  // creation, since which modules apply is a per-tenant decision, not a
-  // default every tenant gets.
+  // A tenant's module subscriptions: which modules its users can see and
+  // launch at all. Deliberately not auto-provisioned at tenant creation —
+  // which modules apply is a per-tenant decision made by the Super Admin.
   async listModules(tenantId: string): Promise<TenantModule[]> {
     await this.ensureTenantExists(tenantId);
 

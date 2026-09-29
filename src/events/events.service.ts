@@ -3,14 +3,14 @@ import { fromEvent, Observable, merge, filter, map, NEVER } from 'rxjs';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 
 // Every event relayed over SSE names the one user it is for.
-export interface UserScopedEvent {
+interface UserScopedEvent {
   userId: string;
 }
 
 // Explicit event-name list (not EventEmitterModule's wildcard mode) so every
 // streamed name is reviewable in one place.
 export const NOTIFICATION_CREATED = 'notification.created';
-export const STREAMED_EVENTS: readonly string[] = [NOTIFICATION_CREATED];
+const STREAMED_EVENTS: readonly string[] = [NOTIFICATION_CREATED];
 
 @Injectable()
 export class EventsService {

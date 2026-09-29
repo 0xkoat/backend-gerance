@@ -8,8 +8,8 @@ import { PrismaClient } from '../generated/prisma/client';
 // @prisma/adapter-pg driver adapter (Prisma 7) rather than Prisma's default
 // query engine — see docs/internship-report-backend.md §4.1 for why, and
 // note this changes how some errors surface (e.g. FK violations raise a
-// DriverAdapterError, not a PrismaClientKnownRequestError — see
-// SoarService.deletePlaybook's own comment for a real case this bit).
+// DriverAdapterError, not a PrismaClientKnownRequestError — so check for
+// dependent rows up front instead of catching a P2003).
 @Injectable()
 export class PrismaService
   extends PrismaClient

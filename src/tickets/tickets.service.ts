@@ -14,6 +14,7 @@ import {
 } from '../generated/prisma/client';
 import type { Ticket } from '../generated/prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { requireTenantId } from '../common/require-tenant-id';
 import type { AuthenticatedUser } from '../auth/jwt.strategy';
 import { NotificationsService } from './notifications.service';
 import { CreateTicketDto } from './dto/createTicket.dto';
@@ -42,9 +43,7 @@ export class TicketsService {
   // Tenant Admins and Analysts raise tickets. Recipients: every Admin of the
   // tenant (except the creator), plus every Integration Admin for MODULES.
   async create(user: AuthenticatedUser, dto: CreateTicketDto) {
-    if (!user.tenantId) {
-      throw new ForbiddenException('This account is not scoped to a tenant');
-    }
+    const tenantId = requireTenantId(user);
     if ((dto.category === TicketCategory.MODULES) !== !!dto.moduleName) {
       throw new BadRequestException(
         dto.category === TicketCategory.MODULES
@@ -57,13 +56,13 @@ export class TicketsService {
       where: { id: user.userId },
       select: { id: true, name: true, email: true, tenantId: true },
     });
-    if (!creator || creator.tenantId !== user.tenantId) {
+    if (!creator || creator.tenantId !== tenantId) {
       throw new ForbiddenException('Account not found in this tenant');
     }
 
     const ticket = await this.prisma.ticket.create({
       data: {
-        tenantId: user.tenantId,
+        tenantId: tenantId,
         createdById: creator.id,
         createdByName: creator.name,
         createdByEmail: creator.email,
@@ -79,7 +78,7 @@ export class TicketsService {
       where: {
         id: { not: creator.id },
         OR: [
-          { tenantId: user.tenantId, role: UserRole.ADMIN },
+          { tenantId: tenantId, role: UserRole.ADMIN },
           ...(dto.category === TicketCategory.MODULES
             ? [{ role: UserRole.INTEGRATION_ADMIN }]
             : []),
