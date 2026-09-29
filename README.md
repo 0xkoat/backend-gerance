@@ -316,7 +316,10 @@ as "any".
 | `GET`, `POST /users`; `GET`, `PATCH`, `DELETE /users/:id`; `PATCH /users/:id/role` | Admin |
 | `POST /users/:id/reset-password` | Admin, Super Admin |
 
-That is 44 routes in total. `postman/` has a collection for trying them by hand.
+That is 44 routes in total. A Postman collection and environment for trying them by hand
+live in `postman/`, which is gitignored (it also collects Newman reports), so they exist only
+on the machine that made them. Run the collection with `--timeout-script 120000`: three steps
+wait about 65 seconds on purpose to stay under the auth rate limit.
 
 ## Testing
 
@@ -344,9 +347,9 @@ Three GitHub Actions workflows sit in `.github/workflows/`:
 
 - `test.yml` runs the unit and end-to-end suites against a Postgres service on pushes to
   `main` and on pull requests.
-- `build.yml` runs lint, the unit tests with coverage, and a SonarCloud scan on every push
-  and pull request. Only on a push to `main`, and only if that passes, it builds and pushes
-  the runner and migrator images to GitHub Container Registry.
+- `build.yml` runs lint, the unit tests with coverage, and a SonarCloud scan on pushes to
+  `main` and on pull requests. Only on a push to `main`, and only if that passes, it builds
+  and pushes the runner and migrator images to GitHub Container Registry.
 - `deploy.yml` runs after `build.yml` succeeds on `main`. It runs on a self-hosted runner
   that lives on the deployment VM (label `secops-vm`), so nothing has to reach the VM from
   the internet. It pulls the new images and restarts the migration job and the backend with
@@ -393,7 +396,7 @@ prisma/
   seed.ts         one-time Super Admin bootstrap
   seed-modules.ts demo dataset generator (npm run seed:demo)
 test/             end-to-end specs
-postman/          Postman collection and environment
+postman/          local Postman collection and environment (gitignored)
 ```
 
 ## Further reading
