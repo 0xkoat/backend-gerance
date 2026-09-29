@@ -109,6 +109,31 @@ notifications.
   reached the Admin's stored notifications and the Integration Admin's open SSE stream;
   Admin status change notified the Analyst; Analyst's reopen attempt 403).
 
+**Security audit of the v2 changes, 2026-09-29** (`security-code-audit`; access control
+re-checked live: cross-user / cross-tenant / wrong-role ticket and notification access all
+404, smuggled `tenantId` 400, analyst on `/module-endpoints` 403, `/modules` never exposes
+the host). Findings and outcome:
+- **F1 + F3 fixed (`c9b306d`)**: the backend saw one address for every request (all traffic
+  comes from the BFF), so the 5/min auth throttle was one platform-wide bucket, and nothing
+  outside `AuthController` was throttled at all. Now `UserThrottlerGuard`
+  (`src/common/user-throttler.guard.ts`) is the last global guard: authenticated requests
+  are tracked per user id, anonymous ones per `req.ip`. `main.ts` sets `trust proxy` to
+  `TRUST_PROXY` (default `loopback, uniquelocal`) so `req.ip` is the `X-Forwarded-For`
+  the BFF sends. Limits: default 120/min, auth 5/min, `POST /tickets` 10/min,
+  `POST /module-endpoints/:name/test` 20/min, `/health` skipped. Tests that need the guard
+  off use `overrideProvider(UserThrottlerGuard)`, not `overrideGuard(ThrottlerGuard)`.
+  Verified live: 120 x 200 then 429 for one user while another still gets 200; 5 failed
+  logins from one address then 429 while another address still gets 401.
+- **F4 fixed (`2f23f61`)**: `npm audit fix` (no `--force`) cleared multer, qs, fast-uri. The
+  `deepmerge-ts` / `mysql2` advisories sit inside the prisma CLI (mysql2 unused with
+  Postgres) and only a breaking downgrade fixes them: accepted.
+- **F6 accepted by choice**: the Integration Admin may set any host, so the connection
+  test and launch redirect can target arbitrary internal addresses. Intended (modules live
+  on private IPs); that role is trusted and platform-wide.
+- **F7 info, no action**: the module list uses the analyst level from the JWT (stale up to
+  15 min); notifications are never pruned.
+- Verified after the fixes: 257 unit / 120 e2e.
+
 Every section below that describes the six modules, the orchestration chain, the asset
 feed, the MockAdapter poller or the "Module implementation plan" is **historical** — it
 documents what was built and then removed, kept for the internship record. Don't treat it
