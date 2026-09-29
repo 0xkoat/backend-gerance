@@ -38,7 +38,7 @@ interface SeedCredential {
 
 const usedEmails = new Set<string>();
 
-function uniqueEmail(tenantSlug: string, role: string): string {
+function uniqueEmail(tenantSlug: string): string {
   let email: string;
   do {
     email = faker.internet
@@ -84,7 +84,7 @@ async function seedTenant(
   }> = [];
 
   function addUser(role: UserRole, analystLevel: AnalystLevel | null = null) {
-    const email = uniqueEmail(tenantSlug, role.toLowerCase());
+    const email = uniqueEmail(tenantSlug);
     const id = randomUUID();
     userRows.push({
       id,
