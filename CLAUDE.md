@@ -1,4 +1,4 @@
-st# Backend — SecOPs API
+# Backend — SecOPs API
 
 Part of the SecOPs multi-tenant SOC SaaS platform (SIEM, SOAR, CTI, EDR, DFIR, VM modules).
 See root `CLAUDE.md` for overall project context.
@@ -16,7 +16,7 @@ See root `CLAUDE.md` for overall project context.
   "v2 redesign" below.
 - Redis deferred — don't introduce it unless there's a clear need
 
-# v2 redesign (supervisor-requested, started 2026-09-28, branch `v2`)
+# v2 redesign (supervisor-requested, started 2026-09-28, branch `v2`, merged into `main` 2026-09-29)
 
 After the project was demoed to the supervisor, the security modules were redefined: SIEM,
 SOAR, CTI, EDR, DFIR and VM are real external platforms (Splunk, Wazuh, etc.), one shared
@@ -133,6 +133,44 @@ the host). Findings and outcome:
 - **F7 info, no action**: the module list uses the analyst level from the JWT (stale up to
   15 min); notifications are never pruned.
 - Verified after the fixes: 257 unit / 120 e2e.
+
+**Phase 5 done 2026-09-29** (commits `2f4d31f`, `0b77957`, `c85e5a9`, `7d342f9`): deployment,
+documentation, verification.
+- `v2` was fast-forward merged into `main` and pushed by the user, backend first, then frontend.
+- **`deploy.yml` now runs on a self-hosted runner** (`runs-on: [self-hosted, secops-vm]`)
+  on the VirtualBox VM instead of SSHing to Azure: the VM is behind NAT, so GitHub's cloud
+  runners cannot reach it, and the runner connects out. It logs in to GHCR at the start of the
+  job and `docker logout`s at the end (no token left on the VM or in an exported OVA). One
+  runner per repository (personal-account repos cannot share one). The Azure/SSH version is in
+  git history; the Azure migration stays deferred. `AZURE_VM_*` secrets are unused.
+- **Bug found by building the image, fixed (`2f4d31f`)**: `prisma/seed-modules.ts` imports
+  `src/module-access/module-levels.ts`, which the Dockerfile's migrator stage did not copy, so
+  `npm run seed:demo` (and `reseed-vm.sh`) failed with TS2307 inside the image. The stage now
+  copies that one file. Any new `src/` import in a seed script needs the same line.
+- Full stack built from source in an isolated Compose project and torn down (`down -v`): 26
+  migrations from empty, both seeds, a real login, throttling behind Docker's network all
+  verified. See `../DOCKERIZATION_TODO.md`'s 2026-09-29 addendum.
+- Docs: this repo's README rewritten for v2 (route table, throttler, self-hosted deploy,
+  limitations); root `README.md`, `VM_SETUP.md` (the VM/runner/OVA runbook), a rewritten
+  `CICD_SETUP.md` and a new root `.env.example` (the old READMEs told readers to copy a file
+  that did not exist). `docker-compose.image.yml` binds Postgres to `127.0.0.1` (Docker
+  publishes ports around `ufw`).
+- **`postman/` is gitignored on purpose** (line 26 of `.gitignore`), so the collection exists
+  only locally. It was still v1 (six module folders, asset feed, Viewer flows, bodies the API
+  now rejects). Converted: module folders removed, Viewer flows became a second Analyst (L2),
+  four folders added (Integration Admin, module endpoints, launch and levels, tickets and
+  notifications) with `pm.test` assertions, environment variables renamed. Run it with
+  `--timeout-script 120000` (three deliberate 65 s pauses exceed Newman's 30 s default) and
+  wait at least 90 s between runs (the last folder makes five logins, so a run started inside
+  that window gets 429 on its first login and every later step cascades into 401/404).
+  One assertion of mine was wrong, not the API: a request repeating the ticket's current status
+  answers 409 before the permission check, so the creator-forbidden test asks for OPEN.
+- The VM was built per `../VM_SETUP.md` (Ubuntu Server 26.04.1, 2 CPU, 4 GB, 25 GB, NAT with
+  forwards 2222 and 3001) and the manual test plan passed on it. **Remaining: export the OVA**
+  (remove both runners, `docker logout`, shred `seed-data.json`, change the Super Admin
+  passwords, `fstrim`, export).
+- Two PDFs were generated outside the repo (a v2 report and a demo script, next to the v1
+  report in the user's Downloads folder).
 
 Every section below that describes the six modules, the orchestration chain, the asset
 feed, the MockAdapter poller or the "Module implementation plan" is **historical** — it
