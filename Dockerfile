@@ -46,6 +46,11 @@ COPY --chown=node:node --from=builder /app/prisma.config.ts ./prisma.config.ts
 COPY --chown=node:node --from=builder /app/src/generated/prisma ./src/generated/prisma/
 COPY --chown=node:node --from=builder /app/tsconfig.json ./tsconfig.json
 
+# prisma/seed-modules.ts imports the default module levels from src/, so that one file (it
+# only depends on the generated enums copied above) has to exist here too. Any other src/
+# import added to a seed script needs the same treatment.
+COPY --chown=node:node --from=builder /app/src/module-access/module-levels.ts ./src/module-access/module-levels.ts
+
 # No fixed ENTRYPOINT/CMD default beyond this — every real invocation supplies
 # its own `command:` (see docker-compose.yml's `migrate`/`seed` services).
 CMD ["npx", "prisma", "migrate", "deploy"]
